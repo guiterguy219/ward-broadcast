@@ -1,3 +1,4 @@
+import { raw } from "hono/html";
 import type { Child } from "hono/jsx";
 import { DISCLAIMER, PROGRAM_NAME } from "../content";
 
@@ -205,7 +206,8 @@ export function Layout({ title, children }: { title: string; children: Child }) 
         <title>{`${title} · ${PROGRAM_NAME}`}</title>
         <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
         <link rel="preload" href={FONT_URL} as="font" type="font/woff2" crossorigin="anonymous" />
-        <style>{styles}</style>
+        {/* raw(): JSX would HTML-escape the quotes in the CSS and break font-family. */}
+        <style>{raw(styles)}</style>
       </head>
       <body>
         <div class="page">
