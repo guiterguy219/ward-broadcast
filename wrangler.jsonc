@@ -1,0 +1,16 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "ward-broadcast",
+  "main": "src/index.tsx",
+  "compatibility_date": "2026-10-01",
+  "workers_dev": false,
+  "routes": [{ "pattern": "broadcast.gibsonj.net", "custom_domain": true }],
+  "observability": { "enabled": true },
+  "vars": {
+    // Flip to "true" once texting is live (campaign approved + bishop sign-off).
+    "SIGNUPS_OPEN": "false",
+    // E.164 Telnyx number; leave empty to hide the "text JOIN" line.
+    "TEXT_NUMBER": "+13858959493",
+    "CONTACT_EMAIL": "broadcast@gibsonj.net"
+  }
+}
