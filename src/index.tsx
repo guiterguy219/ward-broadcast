@@ -1,6 +1,14 @@
 import { Hono } from "hono";
 import { GROUPS, toE164 } from "./content";
-import { HomePage, JoinPage, PrivacyPage, TermsPage, type JoinForm, type SiteConfig } from "./pages/pages";
+import {
+  HomePage,
+  JoinPage,
+  PrivacyPage,
+  TermsPage,
+  type JoinErrors,
+  type JoinForm,
+  type SiteConfig,
+} from "./pages/pages";
 
 export type Env = {
   SIGNUPS_OPEN: string;
@@ -42,12 +50,14 @@ app.post("/join", async (c) => {
     consent: body.consent === "yes",
   };
 
-  const errors: string[] = [];
-  if (!form.name) errors.push("Enter your name.");
-  if (!toE164(form.phone)) errors.push("Enter a 10-digit US mobile number.");
-  if (form.groups.length === 0) errors.push("Choose at least one group.");
-  if (!form.consent) errors.push("Check the box to agree to receive texts.");
-  if (errors.length > 0) return c.html(<JoinPage config={config} form={form} errors={errors} />, 422);
+  const errors: JoinErrors = {};
+  if (!form.name) errors.name = "Enter your name.";
+  if (!toE164(form.phone)) errors.phone = "Enter a 10-digit US mobile number, like (801) 555-0123.";
+  if (form.groups.length === 0) errors.groups = "Choose at least one group.";
+  if (!form.consent) errors.consent = "Check the box to agree to receive texts.";
+  if (Object.keys(errors).length > 0) {
+    return c.html(<JoinPage config={config} form={form} errors={errors} />, 422);
+  }
 
   if (!config.signupsOpen) {
     return c.html(

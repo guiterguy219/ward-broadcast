@@ -4,6 +4,8 @@
   "main": "src/index.tsx",
   "compatibility_date": "2026-10-01",
   "workers_dev": false,
+  // Fonts, favicon, and _headers; anything not found here falls through to the Worker.
+  "assets": { "directory": "public" },
   "routes": [{ "pattern": "broadcast.gibsonj.net", "custom_domain": true }],
   "observability": { "enabled": true },
   "vars": {
