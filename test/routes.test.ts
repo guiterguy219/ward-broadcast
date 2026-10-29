@@ -28,6 +28,13 @@ describe("pages", () => {
     expect(html).toMatch(/name="consent" value="yes"(?! checked)/);
   });
 
+  it("serves the stylesheet unescaped so the web font and font stack apply", async () => {
+    const html = await (await app.request("/", {}, env)).text();
+    const css = html.slice(html.indexOf("<style>"), html.indexOf("</style>"));
+    expect(css).toContain('font-family: "Atkinson Hyperlegible Next"');
+    expect(css).not.toContain("&quot;");
+  });
+
   it("shows text-to-join only when a number is configured", async () => {
     expect(await (await app.request("/", {}, env)).text()).toContain("(801) 555-0100");
     expect(await (await app.request("/", {}, { ...env, TEXT_NUMBER: "" })).text()).not.toContain("JOIN EQ");
