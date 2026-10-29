@@ -39,7 +39,9 @@ describe("POST /join", () => {
     const res = await postJoin([["name", "Test Member"], ["phone", "123"]]);
     expect(res.status).toBe(422);
     const html = await res.text();
-    expect(html).toContain("Enter a 10-digit US mobile number.");
+    expect(html).toContain("Enter a 10-digit US mobile number");
+    expect(html).toContain("3 things need fixing");
+    expect(html).toContain('aria-invalid="true"');
     expect(html).toContain("Choose at least one group.");
     expect(html).toContain("Check the box to agree");
   });
