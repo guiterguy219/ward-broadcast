@@ -1,5 +1,7 @@
 # ward-broadcast
 
+[![CI](https://github.com/guiterguy219/ward-broadcast/actions/workflows/ci.yml/badge.svg)](https://github.com/guiterguy219/ward-broadcast/actions/workflows/ci.yml)
+
 Opt-in SMS announcements for the Payson 10th Ward Elders Quorum and Relief Society.
 Cloudflare Worker (Hono) at https://broadcast.gibsonj.net.
 
@@ -19,7 +21,7 @@ npm run typecheck
 npm run deploy      # manual deploy; needs access to the gibsonj.net zone
 ```
 
-Merging to `main` deploys automatically: `.github/workflows/ci.yml` runs typecheck +
+`main` is protected: changes land through a PR with passing CI. Merging deploys automatically: `.github/workflows/ci.yml` runs typecheck +
 tests on every PR and push, then `wrangler deploy` on `main` using the repo secrets
 `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`.
 
