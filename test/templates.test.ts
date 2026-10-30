@@ -73,3 +73,26 @@ describe("validateTemplate", () => {
     ).toThrow("Unknown group: choir");
   });
 });
+
+describe("starter templates (migration 0006)", () => {
+  it("are valid and fit in one segment with typical values", async () => {
+    const { createTestDb } = await import("./d1");
+    const { listTemplates } = await import("../src/templates");
+    const { composeText } = await import("../src/broadcasts");
+    const { segmentInfo } = await import("../src/segments");
+    const { db } = createTestDb();
+    const samples: Record<string, Record<string, string>> = {
+      "lesson-reminder": { topic: "Behold the Man", extra: "Read ahead if you can." },
+      "help-needed": { what: "loading a moving truck", when: "Saturday at 9 am", details: "Meet at the church." },
+      activity: { what: "Soup and service night", when: "Thursday at 7 pm", where: "the church" },
+      "ministering-interviews": {},
+    };
+    const templates = await listTemplates(db);
+    expect(templates.map((template) => template.slug).sort()).toEqual(Object.keys(samples).sort());
+    for (const template of templates) {
+      validateTemplate(template, ["eq", "rs"]);
+      const body = render(template.body, template.variables, samples[template.slug], builtInValues(new Date(), LINK));
+      expect(segmentInfo(composeText("Payson 10th Ward EQ", body, true)).segments, template.slug).toBe(1);
+    }
+  });
+});
