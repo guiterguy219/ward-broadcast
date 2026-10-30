@@ -42,21 +42,60 @@ export function placeholdersIn(body: string): string[] {
   return [...new Set([...body.matchAll(PLACEHOLDER)].map((match) => match[1]))];
 }
 
+/** Calendar date parts of `now` in ward time. */
+function wardDate(now: Date): { year: number; month: number; day: number; weekday: number } {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: TIME_ZONE,
+      year: "numeric",
+      month: "numeric",
+      day: "numeric",
+      weekday: "short",
+    })
+      .formatToParts(now)
+      .map((part) => [part.type, part.value]),
+  );
+  return {
+    year: Number(parts.year),
+    month: Number(parts.month),
+    day: Number(parts.day),
+    weekday: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(parts.weekday),
+  };
+}
+
 /**
- * Built-in values for a given moment.
- * - sunday: the coming Sunday in ward time, e.g. "Nov 8" (today if it's Sunday)
- * - month: the current month name in ward time, e.g. "November"
+ * The UTC instant when the current ward-time month began (midnight on the 1st
+ * in America/Denver), for "first text this month" checks.
+ */
+export function wardMonthStartUtc(now: Date): Date {
+  const { year, month } = wardDate(now);
+  // Denver midnight is 06:00 or 07:00 UTC depending on DST; pick whichever lands on local midnight.
+  for (const hour of [6, 7]) {
+    const candidate = new Date(Date.UTC(year, month - 1, 1, hour));
+    const local = wardDate(candidate);
+    const localHour = Number(
+      new Intl.DateTimeFormat("en-US", { timeZone: TIME_ZONE, hour: "numeric", hourCycle: "h23" }).format(candidate),
+    );
+    if (local.day === 1 && localHour === 0) return candidate;
+  }
+  return new Date(Date.UTC(year, month - 1, 1, 7));
+}
+
+/**
+ * Built-in values for a given moment, computed on the ward-time calendar (so
+ * DST changes never skip a day).
+ * - sunday: the coming Sunday, e.g. "Nov 8" (today if it's Sunday)
+ * - month: the current month name, e.g. "November"
  * - signup_link: the public signup page, without https://
  */
 export function builtInValues(now: Date, signupLink: string): Record<string, string> {
-  const weekday = new Intl.DateTimeFormat("en-US", { timeZone: TIME_ZONE, weekday: "short" }).format(now);
-  const daysUntilSunday = (7 - ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(weekday)) % 7;
-  const sunday = new Date(now.getTime() + daysUntilSunday * 86_400_000);
-  const format = (options: Intl.DateTimeFormatOptions, date: Date) =>
-    new Intl.DateTimeFormat("en-US", { timeZone: TIME_ZONE, ...options }).format(date);
+  const today = wardDate(now);
+  const sunday = new Date(Date.UTC(today.year, today.month - 1, today.day + ((7 - today.weekday) % 7)));
+  const inUtc = (options: Intl.DateTimeFormatOptions, date: Date) =>
+    new Intl.DateTimeFormat("en-US", { timeZone: "UTC", ...options }).format(date);
   return {
-    sunday: format({ month: "short", day: "numeric" }, sunday),
-    month: format({ month: "long" }, now),
+    sunday: inUtc({ month: "short", day: "numeric" }, sunday),
+    month: inUtc({ month: "long" }, new Date(Date.UTC(today.year, today.month - 1, 1))),
     signup_link: signupLink,
   };
 }
@@ -79,7 +118,11 @@ export function render(
   const unknown = Object.keys(values).filter((name) => !(name in variables) && !(name in builtIns));
   if (unknown.length > 0) throw new TemplateError(`Unknown variable: ${unknown.join(", ")}`);
 
+  // Built-ins can be overridden, e.g. sunday: "Nov 15" for a reminder two weeks out.
   const resolved: Record<string, string> = { ...builtIns };
+  for (const name of Object.keys(builtIns)) {
+    if (values[name]?.trim()) resolved[name] = values[name].trim();
+  }
   const missing: string[] = [];
   for (const [name, spec] of Object.entries(variables)) {
     const value = values[name]?.trim() || spec.default || "";

@@ -11,7 +11,7 @@
 import { listActiveGroups, type Group } from "./db";
 import { normalizePunctuation, segmentInfo, type Encoding } from "./segments";
 import type { SendResult, SmsSender } from "./telnyx";
-import { builtInValues, getTemplate, render, TemplateError } from "./templates";
+import { builtInValues, getTemplate, render, TemplateError, wardMonthStartUtc } from "./templates";
 
 /** Minutes a preview stays sendable. */
 export const PREVIEW_TTL_MINUTES = 15;
@@ -23,6 +23,8 @@ export const MAX_SEND_ATTEMPTS = 3;
 export const EST_COST_PER_SEGMENT_USD = 0.0075;
 export const FOOTER = "Reply STOP to opt out.";
 
+/** Cloudflare Queues accepts at most 100 messages per sendBatch call. */
+const QUEUE_BATCH_LIMIT = 100;
 /** D1 allows 100 bound parameters per statement. */
 const ROWS_PER_INSERT = 20;
 const NOW = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
@@ -37,21 +39,21 @@ type Recipient = { memberId: number; phone: string; group: Group; firstTextThisM
  * Active members of the given groups, one entry per phone. A member in several
  * groups gets the prefix of the first group in `groupSlugs` order.
  */
-async function recipientsFor(db: D1Database, groups: Group[]): Promise<Recipient[]> {
+async function recipientsFor(db: D1Database, groups: Group[], now: Date): Promise<Recipient[]> {
   if (groups.length === 0) return [];
   const placeholders = groups.map(() => "?").join(", ");
   const { results } = await db
     .prepare(
       `SELECT m.id AS member_id, m.phone, ms.group_slug,
          NOT EXISTS (
-           SELECT 1 FROM outbox o WHERE o.phone = m.phone AND o.status IN ('queued', 'sent', 'delivered')
-             AND o.updated_at >= strftime('%Y-%m-01T00:00:00.000Z', 'now')
+           SELECT 1 FROM outbox o WHERE o.phone = m.phone AND o.status IN ('sent', 'delivered')
+             AND o.updated_at >= ?
          ) AS first_this_month
        FROM members m JOIN memberships ms ON ms.member_id = m.id
        WHERE m.status = 'active' AND ms.status = 'active' AND ms.group_slug IN (${placeholders})
        ORDER BY m.id`,
     )
-    .bind(...groups.map((group) => group.slug))
+    .bind(wardMonthStartUtc(now).toISOString(), ...groups.map((group) => group.slug))
     .all<{ member_id: number; phone: string; group_slug: string; first_this_month: number }>();
 
   const order = groups.map((group) => group.slug);
@@ -139,7 +141,7 @@ export async function previewBroadcast(db: D1Database, input: PreviewInput, sign
   if (unknown.length > 0) throw new BroadcastError(`Unknown or inactive group: ${unknown.join(", ")}`);
   const groups = groupSlugs.map((slug) => allGroups.find((group) => group.slug === slug)!);
 
-  const recipients = await recipientsFor(db, groups);
+  const recipients = await recipientsFor(db, groups, now);
   const texts = recipients.map((recipient) =>
     composeText(recipient.group.sender_name, body, recipient.firstTextThisMonth),
   );
@@ -147,8 +149,9 @@ export async function previewBroadcast(db: D1Database, input: PreviewInput, sign
     const text = composeText(group.sender_name, body, true);
     return { group: group.slug, text, segments: segmentInfo(text).segments };
   });
-  const infos = [...texts, ...samples.map((sample) => sample.text)].map(segmentInfo);
-  const totalSegments = texts.reduce((sum, text) => sum + segmentInfo(text).segments, 0);
+  const textInfos = texts.map(segmentInfo);
+  const infos = [...textInfos, ...samples.map((sample) => segmentInfo(sample.text))];
+  const totalSegments = textInfos.reduce((sum, info) => sum + info.segments, 0);
   const ucs = infos.find((info) => info.encoding === "UCS-2");
 
   const previewId = `pv_${randomId()}`;
@@ -195,7 +198,7 @@ export type SendSummary = { broadcastId: number; recipients: number; queueMessag
 export async function sendBroadcast(
   db: D1Database,
   queue: Queue<SendJob>,
-  input: { previewId: string; author: string },
+  input: { previewId: string; author: string; now?: Date },
 ): Promise<SendSummary> {
   const claimed = await db
     .prepare(
@@ -215,7 +218,7 @@ export async function sendBroadcast(
   const groupSlugs = JSON.parse(preview.groups) as string[];
   const allGroups = await listActiveGroups(db);
   const groups = groupSlugs.map((slug) => allGroups.find((group) => group.slug === slug)).filter(Boolean) as Group[];
-  const recipients = await recipientsFor(db, groups);
+  const recipients = await recipientsFor(db, groups, input.now ?? new Date());
 
   const broadcast = (await db
     .prepare(
@@ -264,18 +267,40 @@ export async function sendBroadcast(
   for (let start = 0; start < ids.length; start += SEND_CHUNK_SIZE) {
     jobs.push({ body: { broadcastId: broadcast.id, outboxIds: ids.slice(start, start + SEND_CHUNK_SIZE) } });
   }
-  await queue.sendBatch(jobs);
+  try {
+    for (let start = 0; start < jobs.length; start += QUEUE_BATCH_LIMIT) {
+      await queue.sendBatch(jobs.slice(start, start + QUEUE_BATCH_LIMIT));
+    }
+  } catch (error) {
+    // Cancel every row that hasn't gone out. The consumer only sends 'queued' rows,
+    // so chunks that did make it into the queue are cancelled too (barring a race).
+    await db.batch([
+      db
+        .prepare(
+          `UPDATE outbox SET status = 'failed', error = 'enqueue failed', updated_at = ${NOW}
+           WHERE broadcast_id = ? AND status = 'queued'`,
+        )
+        .bind(broadcast.id),
+      db.prepare("UPDATE broadcasts SET status = 'done' WHERE id = ?").bind(broadcast.id),
+    ]);
+    throw new BroadcastError(
+      `Couldn't queue broadcast ${broadcast.id} (${(error as Error).message}). It was cancelled; ` +
+        "check its status before making a new preview.",
+    );
+  }
   return { broadcastId: broadcast.id, recipients: recipients.length, queueMessages: jobs.length };
 }
 
-/** True for failures worth retrying: network errors and HTTP errors without a Telnyx error code. */
+/** Retry network errors, rate limits, and server errors; anything else won't succeed on retry. */
 function isTransient(result: Extract<SendResult, { ok: false }>): boolean {
-  return !result.code;
+  return result.status === undefined || result.status === 429 || result.status >= 500;
 }
 
 /**
- * Queue consumer for one chunk. Rows already sent (by an earlier attempt) are
- * skipped, so a retried message never double-texts anyone.
+ * Queue consumer for one chunk. Each row's result is saved right after its
+ * send, so a retry (or a crash mid-chunk) re-sends at most the one row that
+ * was in flight, and delivery webhooks can find the Telnyx id immediately.
+ * Members who opted out or left every group in this broadcast are skipped.
  * @returns true if some rows hit a transient error and the message should be retried
  */
 export async function processSendJob(db: D1Database, sender: SmsSender, job: SendJob): Promise<boolean> {
@@ -287,50 +312,51 @@ export async function processSendJob(db: D1Database, sender: SmsSender, job: Sen
   const placeholders = job.outboxIds.map(() => "?").join(", ");
   const { results: rows } = await db
     .prepare(
-      `SELECT o.id, o.phone, o.text, o.attempts, COALESCE(m.status, 'stopped') AS member_status
-       FROM outbox o LEFT JOIN members m ON m.phone = o.phone
+      `SELECT o.id, o.phone, o.text, o.attempts,
+         EXISTS (
+           SELECT 1 FROM members m
+           JOIN memberships ms ON ms.member_id = m.id AND ms.status = 'active'
+           JOIN broadcasts b ON b.id = o.broadcast_id
+           WHERE m.phone = o.phone AND m.status = 'active'
+             AND ms.group_slug IN (SELECT value FROM json_each(b.groups))
+         ) AS still_subscribed
+       FROM outbox o
        WHERE o.id IN (${placeholders}) AND o.status = 'queued'`,
     )
     .bind(...job.outboxIds)
-    .all<{ id: number; phone: string; text: string; attempts: number; member_status: string }>();
+    .all<{ id: number; phone: string; text: string; attempts: number; still_subscribed: number }>();
 
   let retry = false;
-  const updates = [];
   for (const row of rows) {
-    if (row.member_status !== "active") {
-      updates.push(
-        db
-          .prepare(`UPDATE outbox SET status = 'skipped', error = 'opted out', updated_at = ${NOW} WHERE id = ?`)
-          .bind(row.id),
-      );
+    if (!row.still_subscribed) {
+      await db
+        .prepare(`UPDATE outbox SET status = 'skipped', error = 'opted out', updated_at = ${NOW} WHERE id = ?`)
+        .bind(row.id)
+        .run();
       continue;
     }
     const result = await sender.send(row.phone, row.text);
     const attempts = row.attempts + 1;
     if (result.ok) {
-      updates.push(
-        db
-          .prepare(
-            `UPDATE outbox SET status = 'sent', telnyx_id = ?, attempts = ?, error = NULL, updated_at = ${NOW} WHERE id = ?`,
-          )
-          .bind(result.id, attempts, row.id),
-      );
+      await db
+        .prepare(
+          `UPDATE outbox SET status = 'sent', telnyx_id = ?, attempts = ?, error = NULL, updated_at = ${NOW} WHERE id = ?`,
+        )
+        .bind(result.id, attempts, row.id)
+        .run();
     } else if (isTransient(result) && attempts < MAX_SEND_ATTEMPTS) {
       retry = true;
-      updates.push(
-        db
-          .prepare(`UPDATE outbox SET attempts = ?, error = ?, updated_at = ${NOW} WHERE id = ?`)
-          .bind(attempts, result.error, row.id),
-      );
+      await db
+        .prepare(`UPDATE outbox SET attempts = ?, error = ?, updated_at = ${NOW} WHERE id = ?`)
+        .bind(attempts, result.error, row.id)
+        .run();
     } else {
-      updates.push(
-        db
-          .prepare(`UPDATE outbox SET status = 'failed', attempts = ?, error = ?, updated_at = ${NOW} WHERE id = ?`)
-          .bind(attempts, [result.code, result.error].filter(Boolean).join(" "), row.id),
-      );
+      await db
+        .prepare(`UPDATE outbox SET status = 'failed', attempts = ?, error = ?, updated_at = ${NOW} WHERE id = ?`)
+        .bind(attempts, [result.code, result.error].filter(Boolean).join(" "), row.id)
+        .run();
     }
   }
-  if (updates.length > 0) await db.batch(updates);
   await db
     .prepare(
       `UPDATE broadcasts SET status = 'done'

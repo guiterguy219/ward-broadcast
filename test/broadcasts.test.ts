@@ -216,6 +216,65 @@ describe("sendBroadcast + queue consumer", () => {
     expect(await broadcastStatus(db, summary.broadcastId)).toMatchObject({ counts: { sent: 2 } });
   });
 
+  it("saves each send immediately, so a crash mid-chunk never re-texts anyone", async () => {
+    for (const phone of ["+18015550001", "+18015550002", "+18015550003"]) addMember(phone, ["eq"]);
+    const preview = await previewBroadcast(db, { author: "jared", groups: ["eq"], body: "Crash" }, LINK);
+    await sendBroadcast(db, queue as unknown as Queue<SendJob>, { previewId: preview.previewId, author: "jared" });
+    const [job] = queue.take();
+    const crashing = {
+      send: async (to: string, text: string) => {
+        if (sender.sent.length === 2) throw new Error("worker died");
+        return sender.send(to, text);
+      },
+    };
+    await expect(processSendJob(db, crashing, job)).rejects.toThrow("worker died");
+    await processSendJob(db, sender, job);
+    expect(sender.sent.map((message) => message.to)).toEqual(["+18015550001", "+18015550002", "+18015550003"]);
+  });
+
+  it("retries rate limits (429) and skips a member who left the group after queueing", async () => {
+    addMember("+18015550001", ["eq"]);
+    addMember("+18015550002", ["eq", "rs"]);
+    const preview = await previewBroadcast(db, { author: "jared", groups: ["eq"], body: "Rate" }, LINK);
+    const { broadcastId } = await sendBroadcast(db, queue as unknown as Queue<SendJob>, {
+      previewId: preview.previewId,
+      author: "jared",
+    });
+    sqlite
+      .prepare(
+        "UPDATE memberships SET status = 'left' WHERE group_slug = 'eq' AND member_id = (SELECT id FROM members WHERE phone = '+18015550002')",
+      )
+      .run();
+    let first = true;
+    const limited = {
+      send: async (to: string, text: string) => {
+        if (first) {
+          first = false;
+          return { ok: false as const, status: 429, code: "10011", error: "Too many requests" };
+        }
+        return sender.send(to, text);
+      },
+    };
+    const [job] = queue.take();
+    expect(await processSendJob(db, limited, job)).toBe(true);
+    expect(await processSendJob(db, limited, job)).toBe(false);
+    expect(await broadcastStatus(db, broadcastId)).toMatchObject({ counts: { sent: 1, skipped: 1 } });
+  });
+
+  it("cancels the broadcast and says so when enqueueing fails", async () => {
+    addMember("+18015550001", ["eq"]);
+    const preview = await previewBroadcast(db, { author: "jared", groups: ["eq"], body: "Queue down" }, LINK);
+    const broken = { sendBatch: async () => Promise.reject(new Error("queue unavailable")) };
+    await expect(
+      sendBroadcast(db, broken as unknown as Queue<SendJob>, { previewId: preview.previewId, author: "jared" }),
+    ).rejects.toThrow("was cancelled");
+    const row = sqlite.prepare("SELECT status FROM broadcasts").get();
+    expect(row).toEqual({ status: "done" });
+    expect(sqlite.prepare("SELECT status, error FROM outbox").all()).toEqual([
+      { status: "failed", error: "enqueue failed" },
+    ]);
+  });
+
   it("records delivery results from Telnyx", async () => {
     addMember("+18015550001", ["eq"]);
     addMember("+18015550002", ["eq"]);
