@@ -16,6 +16,18 @@
       "migrations_dir": "migrations"
     }
   ],
+  "queues": {
+    "producers": [{ "binding": "SEND_QUEUE", "queue": "ward-broadcast-send" }],
+    "consumers": [
+      {
+        "queue": "ward-broadcast-send",
+        // One chunk (up to 40 recipients) per run keeps each run under 50 outbound fetches.
+        "max_batch_size": 1,
+        "max_retries": 5,
+        "dead_letter_queue": "ward-broadcast-send-dlq"
+      }
+    ]
+  },
   "vars": {
     // Flip to "true" once texting is live (campaign approved + bishop sign-off).
     "SIGNUPS_OPEN": "false",

@@ -3,7 +3,8 @@
  * Uses only fetch and WebCrypto, so it runs the same in Workers and Node tests.
  */
 
-export type SendResult = { ok: true; id: string } | { ok: false; error: string; code?: string };
+/** `status` is the HTTP status (absent for network errors); `code` is Telnyx's error code. */
+export type SendResult = { ok: true; id: string } | { ok: false; error: string; code?: string; status?: number };
 
 /** Anything that can send one SMS; tests use a fake. */
 export interface SmsSender {
@@ -35,6 +36,7 @@ export function telnyxSender(apiKey: string, from: string): SmsSender {
       const first = body?.errors?.[0];
       return {
         ok: false,
+        status: response.status,
         code: first?.code,
         error: first ? `${first.title ?? "error"}: ${first.detail ?? ""}`.trim() : `HTTP ${response.status}`,
       };

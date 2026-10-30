@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
-import app, { type Env } from "../src/index";
+import { createApp, type Env } from "../src/index";
+
+const app = createApp();
 import { toE164 } from "../src/content";
 import { findMemberByPhone } from "../src/db";
 import { createTestDb } from "./d1";
+import { FakeQueue } from "./fakes";
 
 const env: Env = {
   DB: createTestDb().db,
+  SEND_QUEUE: new FakeQueue() as unknown as Env["SEND_QUEUE"],
   SIGNUPS_OPEN: "false",
   TEXT_NUMBER: "+18015550100",
   CONTACT_EMAIL: "test@example.com",
