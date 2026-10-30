@@ -82,6 +82,31 @@ describe("POST /join", () => {
     expect(res.status).toBe(200);
     expect(await res.text()).toContain("reply YES");
     expect(await findMemberByPhone(DB, "+18015550124")).toMatchObject({ name: "Test Member", status: "pending" });
+
+    const again = await postJoin(
+      [["name", "Test Member"], ["phone", "8015550124"], ["groups", "rs"], ["consent", "yes"]],
+      { DB, SIGNUPS_OPEN: "true" },
+    );
+    expect(await again.text()).toContain("Watch for a text");
+  });
+
+  it("tells a stopped number to text START instead of re-opening it", async () => {
+    const { db: DB, sqlite } = createTestDb();
+    const fields: [string, string][] = [["name", "Test"], ["phone", "8015550125"], ["groups", "eq"], ["consent", "yes"]];
+    await postJoin(fields, { DB, SIGNUPS_OPEN: "true" });
+    sqlite.prepare("UPDATE members SET status = 'stopped'").run();
+    const html = await (await postJoin(fields, { DB, SIGNUPS_OPEN: "true" })).text();
+    expect(html).toContain("text START to (801) 555-0100");
+    expect((await findMemberByPhone(DB, "+18015550125"))?.status).toBe("stopped");
+  });
+
+  it("returns a form error, not a 500, for a group that is no longer active", async () => {
+    const { db: DB, sqlite } = createTestDb();
+    const fields: [string, string][] = [["name", "Test"], ["phone", "8015550126"], ["groups", "rs"], ["consent", "yes"]];
+    sqlite.prepare("UPDATE groups SET active = 0 WHERE slug = 'rs'").run();
+    const res = await postJoin(fields, { DB, SIGNUPS_OPEN: "true" });
+    expect(res.status).toBe(422);
+    expect(await res.text()).toContain("Choose at least one group.");
   });
 });
 

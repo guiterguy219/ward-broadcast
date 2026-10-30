@@ -33,3 +33,10 @@ tests on every PR and push, then `wrangler deploy` on `main` using the repo secr
 | `SIGNUPS_OPEN` | `"true"` once the campaign is approved and the bishop has signed off |
 | `TEXT_NUMBER` | Telnyx number in E.164; empty hides the "text JOIN" line |
 | `CONTACT_EMAIL` | Shown on every page and in HELP replies |
+
+## Database
+
+D1 (`ward-broadcast`), schema in `migrations/`. CI applies pending migrations, then deploys.
+Keep migrations additive (new tables, columns, indexes) so the running Worker never breaks
+if a deploy fails after the schema changes. Apply locally with
+`npx wrangler d1 migrations apply ward-broadcast --remote`.

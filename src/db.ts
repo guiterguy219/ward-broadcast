@@ -40,6 +40,8 @@ export async function findMemberByPhone(db: D1Database, phone: string): Promise<
   return db.prepare("SELECT * FROM members WHERE phone = ?").bind(phone).first<Member>();
 }
 
+export class UnknownGroupError extends Error {}
+
 export type SignupRequest = {
   /** E.164 phone, already validated. */
   phone: string;
@@ -54,74 +56,91 @@ export type SignupRequest = {
 };
 
 export type SignupResult = {
-  memberId: number;
   /** Groups now waiting for the member to reply YES. */
   pendingGroups: string[];
-  /** Groups the member was already active in; nothing changes for these. */
+  /** Groups the member is already receiving; nothing changes for these. */
   alreadyActive: string[];
+  /**
+   * The number texted STOP and the request didn't come from the phone itself.
+   * Nothing is texted; the member must text START or JOIN to opt back in.
+   */
+  stopped: boolean;
 };
 
 /**
  * Records a request to join one or more groups. Nothing becomes active until
- * the member replies YES (see confirmPending, added with the SMS handlers).
+ * the member replies YES from their phone.
  *
  * Steps:
  * 1. Reject unknown or inactive groups.
- * 2. Upsert the member: new or stopped numbers become 'pending'; active stays active.
- * 3. Upsert memberships: active ones stay active; everything else becomes 'pending'.
- * 4. Log one consent row per requested group.
+ * 2. Read the member's current state to decide what changes.
+ * 3. In one batch: upsert the member, upsert memberships, log consent per group.
+ *    - A stopped number only leaves 'stopped' when the request comes by SMS from
+ *      that phone; web and admin requests are logged but can't re-open it.
+ *    - Existing names are never overwritten from the public form.
+ *    - Active memberships stay active even if a confirmation lands mid-request.
  *
- * @throws Error if any group slug is unknown or inactive, or no groups are given
+ * @throws UnknownGroupError if any group slug is unknown or inactive, or none are given
  */
 export async function requestSignup(db: D1Database, request: SignupRequest): Promise<SignupResult> {
   const groupSlugs = [...new Set(request.groups)];
-  if (groupSlugs.length === 0) throw new Error("At least one group is required.");
+  if (groupSlugs.length === 0) throw new UnknownGroupError("At least one group is required.");
   const known = new Set((await listActiveGroups(db)).map((group) => group.slug));
   const unknown = groupSlugs.filter((slug) => !known.has(slug));
-  if (unknown.length > 0) throw new Error(`Unknown group: ${unknown.join(", ")}`);
+  if (unknown.length > 0) throw new UnknownGroupError(`Unknown group: ${unknown.join(", ")}`);
 
-  const member = await db
+  const existing = await findMemberByPhone(db, request.phone);
+  const stopped = existing?.status === "stopped" && request.source !== "sms";
+  const activeBefore = new Set<string>();
+  if (existing?.status === "active") {
+    const { results } = await db
+      .prepare("SELECT group_slug FROM memberships WHERE member_id = ? AND status = 'active'")
+      .bind(existing.id)
+      .all<{ group_slug: string }>();
+    for (const row of results) activeBefore.add(row.group_slug);
+  }
+  const alreadyActive = groupSlugs.filter((slug) => activeBefore.has(slug));
+  const pendingGroups = stopped ? [] : groupSlugs.filter((slug) => !activeBefore.has(slug));
+  const loggedGroups = stopped ? groupSlugs : pendingGroups;
+
+  // A stopped member keeps 'stopped' unless the request came from their own phone.
+  const nextStatus = `CASE
+      WHEN members.status = 'active' THEN 'active'
+      WHEN members.status = 'stopped' AND ?3 <> 'sms' THEN 'stopped'
+      ELSE 'pending' END`;
+  const memberUpsert = db
     .prepare(
       `INSERT INTO members (phone, name, status) VALUES (?1, ?2, 'pending')
        ON CONFLICT (phone) DO UPDATE SET
-         name = COALESCE(excluded.name, members.name),
-         status = CASE WHEN members.status = 'active' THEN 'active' ELSE 'pending' END,
-         updated_at = ${NOW}
-       RETURNING id`,
+         name = COALESCE(members.name, excluded.name),
+         updated_at = CASE WHEN ${nextStatus} <> members.status OR (members.name IS NULL AND excluded.name IS NOT NULL)
+                           THEN ${NOW} ELSE members.updated_at END,
+         status = ${nextStatus}`,
     )
-    .bind(request.phone, request.name?.trim() || null)
-    .first<{ id: number }>();
-  if (!member) throw new Error("Failed to upsert member.");
+    .bind(request.phone, request.name?.trim() || null, request.source);
 
-  const existing = await db
-    .prepare("SELECT group_slug, status FROM memberships WHERE member_id = ?")
-    .bind(member.id)
-    .all<{ group_slug: string; status: string }>();
-  const activeBefore = new Set(
-    existing.results.filter((row) => row.status === "active").map((row) => row.group_slug),
+  const membershipUpserts = pendingGroups.map((slug) =>
+    db
+      .prepare(
+        `INSERT INTO memberships (member_id, group_slug, status)
+         VALUES ((SELECT id FROM members WHERE phone = ?1), ?2, 'pending')
+         ON CONFLICT (member_id, group_slug) DO UPDATE SET
+           status = CASE WHEN memberships.status = 'active' THEN 'active' ELSE 'pending' END,
+           updated_at = ${NOW}`,
+      )
+      .bind(request.phone, slug),
   );
-  const alreadyActive = groupSlugs.filter((slug) => activeBefore.has(slug));
-  const pendingGroups = groupSlugs.filter((slug) => !activeBefore.has(slug));
 
   const action = request.source === "admin" ? "invited" : "join_requested";
-  const statements = [
-    ...pendingGroups.map((slug) =>
-      db
-        .prepare(
-          `INSERT INTO memberships (member_id, group_slug, status) VALUES (?1, ?2, 'pending')
-           ON CONFLICT (member_id, group_slug) DO UPDATE SET status = 'pending', updated_at = ${NOW}`,
-        )
-        .bind(member.id, slug),
-    ),
-    ...pendingGroups.map((slug) =>
-      db
-        .prepare(
-          "INSERT INTO consent_log (phone, action, group_slug, source, actor, detail) VALUES (?, ?, ?, ?, ?, ?)",
-        )
-        .bind(request.phone, action, slug, request.source, request.actor ?? null, request.detail ?? null),
-    ),
-  ];
-  if (statements.length > 0) await db.batch(statements);
+  const detail = stopped ? `${request.detail ?? ""} [number is stopped; not re-opened]`.trim() : request.detail;
+  const consentRows = loggedGroups.map((slug) =>
+    db
+      .prepare(
+        "INSERT INTO consent_log (phone, action, group_slug, source, actor, detail) VALUES (?, ?, ?, ?, ?, ?)",
+      )
+      .bind(request.phone, action, slug, request.source, request.actor ?? null, detail ?? null),
+  );
 
-  return { memberId: member.id, pendingGroups, alreadyActive };
+  await db.batch([memberUpsert, ...membershipUpserts, ...consentRows]);
+  return { pendingGroups, alreadyActive, stopped };
 }

@@ -29,6 +29,7 @@ CREATE TABLE memberships (
   updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
   PRIMARY KEY (member_id, group_slug)
 );
+CREATE INDEX memberships_group ON memberships (group_slug, status);
 
 -- Append-only audit trail of consent, kept even after a member is deleted.
 CREATE TABLE consent_log (
