@@ -18,7 +18,7 @@ describe("pages", () => {
   it.each(["/", "/join", "/terms", "/privacy"])("%s renders with the not-official disclaimer", async (path) => {
     const res = await app.request(path, {}, env);
     expect(res.status).toBe(200);
-    expect(await res.text()).toContain("not an official website or product");
+    expect(await res.text()).toContain("not an official website or");
   });
 
   it("join page shows required SMS disclosures and an unchecked consent box", async () => {

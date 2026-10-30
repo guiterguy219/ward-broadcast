@@ -1,6 +1,9 @@
 /** Program wording shared by the pages, terms, and (later) the SMS replies. */
 
-export const PROGRAM_NAME = "Payson 10th Ward Announcements";
+export const PROGRAM_NAME = "GibsonJ Broadcast";
+export const OPERATOR = "Jared Gibson";
+/** Who the service currently sends for; shown under the name. */
+export const SERVING = "Payson 10th Ward Elders Quorum and Relief Society";
 export const EFFECTIVE_DATE = "October 29, 2026";
 
 /** Groups a member can join; `keyword` is what they text after JOIN. */
@@ -18,8 +21,8 @@ export const KEYWORDS = "Reply HELP for help or STOP to opt out at any time.";
 
 /** Required by General Handbook 38.8.21.2 for calling-related websites. */
 export const DISCLAIMER =
-  "Run by volunteers in the Payson 10th Ward for quorum and Relief Society announcements. " +
-  "This is not an official website or product of The Church of Jesus Christ of Latter-day Saints.";
+  "GibsonJ Broadcast is a personal project by Jared Gibson. It is not an official website or " +
+  "product of The Church of Jesus Christ of Latter-day Saints, and it does not speak for the ward.";
 
 /**
  * Formats an E.164 US number for display.
