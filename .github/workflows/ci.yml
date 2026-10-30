@@ -40,3 +40,7 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # Schema first, so new code never runs against an old database.
+          command: |
+            d1 migrations apply ward-broadcast --remote
+            deploy

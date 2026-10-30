@@ -8,6 +8,14 @@
   "assets": { "directory": "public" },
   "routes": [{ "pattern": "broadcast.gibsonj.net", "custom_domain": true }],
   "observability": { "enabled": true },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "ward-broadcast",
+      "database_id": "1759dfd9-4408-4d22-b794-517e652df79f",
+      "migrations_dir": "migrations"
+    }
+  ],
   "vars": {
     // Flip to "true" once texting is live (campaign approved + bishop sign-off).
     "SIGNUPS_OPEN": "false",

@@ -1,8 +1,15 @@
 import { describe, expect, it } from "vitest";
 import app, { type Env } from "../src/index";
 import { toE164 } from "../src/content";
+import { findMemberByPhone } from "../src/db";
+import { createTestDb } from "./d1";
 
-const env: Env = { SIGNUPS_OPEN: "false", TEXT_NUMBER: "+18015550100", CONTACT_EMAIL: "test@example.com" };
+const env: Env = {
+  DB: createTestDb().db,
+  SIGNUPS_OPEN: "false",
+  TEXT_NUMBER: "+18015550100",
+  CONTACT_EMAIL: "test@example.com",
+};
 
 /** Posts the signup form as a browser would. */
 function postJoin(fields: [string, string][], overrides: Partial<Env> = {}) {
@@ -63,6 +70,18 @@ describe("POST /join", () => {
     ]);
     expect(res.status).toBe(200);
     expect(await res.text()).toContain("nothing was saved");
+    expect(await findMemberByPhone(env.DB, "+18015550123")).toBeNull();
+  });
+
+  it("stores a pending signup when signups are open", async () => {
+    const DB = createTestDb().db;
+    const res = await postJoin(
+      [["name", "Test Member"], ["phone", "(801) 555-0124"], ["groups", "rs"], ["consent", "yes"]],
+      { DB, SIGNUPS_OPEN: "true" },
+    );
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("reply YES");
+    expect(await findMemberByPhone(DB, "+18015550124")).toMatchObject({ name: "Test Member", status: "pending" });
   });
 });
 

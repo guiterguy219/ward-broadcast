@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { GROUPS, toE164 } from "./content";
+import { requestSignup } from "./db";
 import {
   HomePage,
   JoinPage,
@@ -11,6 +12,7 @@ import {
 } from "./pages/pages";
 
 export type Env = {
+  DB: D1Database;
   SIGNUPS_OPEN: string;
   TEXT_NUMBER: string;
   CONTACT_EMAIL: string;
@@ -34,9 +36,9 @@ app.get("/privacy", (c) => c.html(<PrivacyPage config={siteConfig(c.env)} />));
 app.get("/healthz", (c) => c.text("ok"));
 
 /**
- * Validates the signup form. Saving and the confirmation text come with the
- * messaging build; until SIGNUPS_OPEN is "true" a valid form is acknowledged
- * but not stored.
+ * Validates and stores a web signup as pending. The reply-YES confirmation
+ * text is sent by the SMS layer. Until SIGNUPS_OPEN is "true" a valid form is
+ * acknowledged but not stored.
  */
 app.post("/join", async (c) => {
   const config = siteConfig(c.env);
@@ -67,8 +69,20 @@ app.post("/join", async (c) => {
       />,
     );
   }
-  // Signups open: storing the member and sending the reply-YES text land with the messaging build.
-  return c.text("Signups are not implemented yet.", 501);
+  const phone = toE164(form.phone) as string;
+  await requestSignup(c.env.DB, {
+    phone,
+    name: form.name,
+    groups: form.groups,
+    source: "web",
+    detail: `web form: groups=${form.groups.join(",")}; consent box checked`,
+  });
+  return c.html(
+    <JoinPage
+      config={config}
+      notice="Thanks! Watch for a text from us and reply YES to finish signing up."
+    />,
+  );
 });
 
 /**
