@@ -306,9 +306,10 @@ export function PrivacyPage({ config }: { config: SiteConfig }) {
         </p>
         <h2>Keeping and deleting it</h2>
         <p>
-          If you opt out, we stop texting you and delete your name and group memberships. We keep the opt-out record so
-          we never text you again by mistake. To have everything deleted, email{" "}
-          <a href={`mailto:${config.contactEmail}`}>{config.contactEmail}</a>.
+          If you text STOP, we stop texting you right away. We keep your number, name, groups, and the opt-out record so
+          we never text you again by mistake and can restore your groups if you text START. To have your name and groups
+          deleted, email <a href={`mailto:${config.contactEmail}`}>{config.contactEmail}</a>; we keep only the opt-out
+          record.
         </p>
       </div>
     </Layout>

@@ -1,6 +1,15 @@
 import { Hono } from "hono";
 import { CONTACT_SERVING_SHORT, formatUsPhone, OPERATOR, PROGRAM_NAME, toE164 } from "./content";
-import { claimInboundEvent, listActiveGroups, requestSignup, UnknownGroupError, type SignupResult } from "./db";
+import {
+  allowWebConfirmation,
+  claimInboundEvent,
+  listActiveGroups,
+  releaseInboundEvent,
+  requestSignup,
+  UnknownGroupError,
+  type Group,
+  type SignupResult,
+} from "./db";
 import { handleInbound } from "./inbound";
 import { confirmRequest, type ProgramConfig } from "./messages";
 import { telnyxSender, verifyTelnyxSignature, type SmsSender, type TelnyxEvent } from "./telnyx";
@@ -26,6 +35,9 @@ export type Env = {
   /** "app" (default) or "telnyx": who answers STOP/START/HELP. */
   KEYWORD_REPLIES?: string;
 };
+
+/** Whether the web signup's confirmation text went out. */
+type ConfirmationDelivery = "sent" | "failed" | "limited" | "not-needed";
 
 export type AppOptions = {
   /** Builds the SMS sender; tests pass a fake. */
@@ -118,22 +130,42 @@ export function createApp(options: AppOptions = {}) {
       const groupErrors: JoinErrors = { groups: "That group isn't taking sign-ups right now. Choose another." };
       return c.html(<JoinPage config={config} groups={groups} form={form} errors={groupErrors} />, 422);
     }
+    let delivery: ConfirmationDelivery = "not-needed";
     if (result.pendingGroups.length > 0) {
-      const pending = groups.filter((group) => result.pendingGroups.includes(group.slug));
-      const sent = await makeSender(c.env).send(phone, confirmRequest(programConfig(c.env), pending));
-      if (!sent.ok) console.error("signup confirmation failed", sent.code ?? "", sent.error);
+      delivery = "limited";
+      if (await allowWebConfirmation(c.env.DB, phone)) {
+        const pending = groups.filter((group) => result.pendingGroups.includes(group.slug));
+        const sent = await makeSender(c.env).send(phone, confirmRequest(programConfig(c.env), pending));
+        if (!sent.ok) console.error("signup confirmation failed", sent.code ?? "", sent.error);
+        delivery = sent.ok ? "sent" : "failed";
+      }
     }
-    return c.html(<JoinPage config={config} groups={groups} notice={signupNotice(result, config)} />);
+    const notice = signupNotice(result, delivery, config, groups);
+    return c.html(<JoinPage config={config} groups={groups} notice={notice} />);
   });
 
   /** What to tell someone after a valid signup, based on what actually changed. */
-  function signupNotice(result: SignupResult, config: SiteConfig): string {
+  /**
+   * What to tell someone after a valid signup, based on what changed and whether
+   * the confirmation text actually went out.
+   */
+  function signupNotice(
+    result: SignupResult,
+    delivery: ConfirmationDelivery,
+    config: SiteConfig,
+    groups: Group[],
+  ): string {
+    const where = config.textNumber ? ` to ${formatUsPhone(config.textNumber)}` : "";
     if (result.stopped) {
-      const where = config.textNumber ? ` to ${formatUsPhone(config.textNumber)}` : "";
       return `This number opted out by texting STOP. To turn texts back on, text START${where} from that phone.`;
     }
-    if (result.pendingGroups.length === 0) return "You're already signed up for those groups. No changes needed.";
-    return "Thanks! Watch for a text from us and reply YES to finish signing up.";
+    if (delivery === "not-needed") return "You're already signed up for those groups. No changes needed.";
+    if (delivery === "sent") return "Thanks! Watch for a text from us and reply YES to finish signing up.";
+    const keywords = groups.filter((group) => result.pendingGroups.includes(group.slug)).map((group) => group.keyword);
+    const join = `JOIN ${keywords.join(" ")}`;
+    return delivery === "limited"
+      ? `We already sent a confirmation text to this number recently. Reply YES to it, or text ${join}${where}.`
+      : `We saved your sign-up but couldn't send the confirmation text. To finish, text ${join}${where}.`;
   }
 
   /**
@@ -169,19 +201,26 @@ export function createApp(options: AppOptions = {}) {
     if (!from || !messageId) return c.json({ error: "missing sender or id" }, 400);
     if (!(await claimInboundEvent(c.env.DB, messageId))) return c.json({ received: true, duplicate: true });
 
-    const outcome = await handleInbound(
-      {
-        db: c.env.DB,
-        sender: makeSender(c.env),
-        program: programConfig(c.env),
-        serving: CONTACT_SERVING_SHORT,
-        appRepliesToKeywords: c.env.KEYWORD_REPLIES !== "telnyx",
-      },
-      from,
-      payload?.text ?? "",
-    );
-    console.log("inbound", outcome.action, outcome.replied ? "replied" : "no reply");
-    return c.json({ received: true });
+    try {
+      const outcome = await handleInbound(
+        {
+          db: c.env.DB,
+          sender: makeSender(c.env),
+          program: programConfig(c.env),
+          serving: CONTACT_SERVING_SHORT,
+          appRepliesToKeywords: c.env.KEYWORD_REPLIES !== "telnyx",
+        },
+        from,
+        payload?.text ?? "",
+      );
+      console.log("inbound", outcome.action, outcome.replied ? "replied" : "no reply");
+      return c.json({ received: true });
+    } catch (error) {
+      // Release the claim and fail so Telnyx retries; a lost STOP is worse than a repeated reply.
+      await releaseInboundEvent(c.env.DB, messageId);
+      console.error("inbound handling failed", (error as Error).message);
+      return c.json({ error: "processing failed" }, 500);
+    }
   });
 
   return app;

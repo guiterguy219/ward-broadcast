@@ -97,3 +97,4 @@ Every broadcast starts with the group's sender name and, when it fits, ends with
 
 - Bishop approval (General Handbook 38.8.21.2) and a second admin.
 - Set `SIGNUPS_OPEN` to `"true"` in `wrangler.jsonc` once texting is built and the campaign is approved.
+- Add a Cloudflare Turnstile check to `/join` before opening it; per-number and global confirmation-text limits are already in place.

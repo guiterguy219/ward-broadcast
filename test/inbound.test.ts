@@ -166,7 +166,7 @@ describe("inbound texts via the webhook", () => {
     await text("HELP", PHONE, undefined, { KEYWORD_REPLIES: "telnyx" });
     await text("STOP", PHONE, undefined, { KEYWORD_REPLIES: "telnyx" });
     expect(sender.sent).toHaveLength(0);
-    expect(await status()).toBeUndefined();
+    expect(await status()).toBe("stopped");
     expect(sqlite.prepare("SELECT action FROM consent_log").all()).toEqual([{ action: "stopped" }]);
   });
 
@@ -175,6 +175,84 @@ describe("inbound texts via the webhook", () => {
     const res = await text("JOIN EQ");
     expect(res.status).toBe(200);
     expect(await status()).toBe("pending");
+  });
+
+  it("a number that texted STOP without ever joining gets no further texts", async () => {
+    await text("STOP");
+    sender.sent = [];
+    await text("who is this?");
+    await app.request(
+      "/join",
+      {
+        method: "POST",
+        body: new URLSearchParams([
+          ["name", "X"],
+          ["phone", "8015550123"],
+          ["groups", "eq"],
+          ["consent", "yes"],
+        ]),
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+      },
+      env,
+    );
+    expect(sender.to(PHONE)).toEqual([]);
+    expect(await status()).toBe("stopped");
+  });
+
+  it("JOIN after STOP needs a fresh YES and only restores the requested group", async () => {
+    await text("JOIN EQ RS");
+    await text("YES");
+    await text("STOP");
+    await text("JOIN EQ");
+    expect(lastReply()).toContain("Reply YES to get Payson 10th Ward EQ texts");
+    await text("YES");
+    expect(lastReply()).toContain("You're signed up for Payson 10th Ward EQ texts");
+    expect(await status()).toBe("active");
+    const rows = sqlite.prepare("SELECT group_slug, status FROM memberships ORDER BY group_slug").all();
+    expect(rows).toEqual([
+      { group_slug: "eq", status: "active" },
+      { group_slug: "rs", status: "left" },
+    ]);
+  });
+
+  it("releases the claim when handling fails, so Telnyx's retry is processed", async () => {
+    let calls = 0;
+    const flaky = createApp({
+      makeSender: () => ({
+        send: async (to, body) => {
+          calls += 1;
+          if (calls === 1) throw new Error("boom");
+          return sender.send(to, body);
+        },
+      }),
+    });
+    const raw = inboundEvent(PHONE, "JOIN EQ", "retry-1");
+    const post = async () =>
+      flaky.request("/api/webhook", { method: "POST", body: raw, headers: await signer.sign(raw) }, env);
+    expect((await post()).status).toBe(500);
+    expect((await post()).status).toBe(200);
+    expect(sender.to(PHONE)).toHaveLength(1);
+  });
+
+  it("rate-limits confirmation texts from the web form", async () => {
+    const signup = () =>
+      app.request(
+        "/join",
+        {
+          method: "POST",
+          body: new URLSearchParams([
+            ["name", "W"],
+            ["phone", "8015550188"],
+            ["groups", "eq"],
+            ["consent", "yes"],
+          ]),
+          headers: { "content-type": "application/x-www-form-urlencoded" },
+        },
+        env,
+      );
+    expect(await (await signup()).text()).toContain("Watch for a text");
+    expect(await (await signup()).text()).toContain("already sent a confirmation text");
+    expect(sender.to("+18015550188")).toHaveLength(1);
   });
 
   it("HELP returns the registered help text", async () => {

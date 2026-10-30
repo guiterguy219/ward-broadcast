@@ -117,17 +117,34 @@ export async function requestSignup(db: D1Database, request: SignupRequest): Pro
     )
     .bind(request.phone, request.name?.trim() || null, request.source);
 
+  // Runs after the member upsert in the same batch, so the member's status here is the new one:
+  // an active membership stays active only while the member is active.
   const membershipUpserts = pendingGroups.map((slug) =>
     db
       .prepare(
         `INSERT INTO memberships (member_id, group_slug, status)
          VALUES ((SELECT id FROM members WHERE phone = ?1), ?2, 'pending')
          ON CONFLICT (member_id, group_slug) DO UPDATE SET
-           status = CASE WHEN memberships.status = 'active' THEN 'active' ELSE 'pending' END,
+           status = CASE WHEN memberships.status = 'active'
+                          AND (SELECT status FROM members WHERE phone = ?1) = 'active'
+                         THEN 'active' ELSE 'pending' END,
            updated_at = ${NOW}`,
       )
       .bind(request.phone, slug),
   );
+  // Re-joining by SMS after STOP is a fresh opt-in for just these groups; START is what restores all.
+  const reopening = existing?.status === "stopped" && request.source === "sms";
+  if (reopening) {
+    const placeholders = groupSlugs.map(() => "?").join(", ");
+    membershipUpserts.push(
+      db
+        .prepare(
+          `UPDATE memberships SET status = 'left', updated_at = ${NOW}
+           WHERE member_id = ? AND status = 'active' AND group_slug NOT IN (${placeholders})`,
+        )
+        .bind(existing.id, ...groupSlugs),
+    );
+  }
 
   const action = request.source === "admin" ? "invited" : "join_requested";
   const detail = stopped ? `${request.detail ?? ""} [number is stopped; not re-opened]`.trim() : request.detail;
@@ -172,13 +189,14 @@ export async function confirmPending(db: D1Database, phone: string, detail: stri
     .all<Group>();
   if (pending.length === 0) return [];
 
+  const placeholders = pending.map(() => "?").join(", ");
   await db.batch([
     db
       .prepare(
         `UPDATE memberships SET status = 'active', updated_at = ${NOW}
-         WHERE member_id = ? AND status = 'pending'`,
+         WHERE member_id = ? AND status = 'pending' AND group_slug IN (${placeholders})`,
       )
-      .bind(member.id),
+      .bind(member.id, ...pending.map((group) => group.slug)),
     db.prepare(`UPDATE members SET status = 'active', updated_at = ${NOW} WHERE id = ?`).bind(member.id),
     ...pending.map((group) =>
       db
@@ -212,10 +230,18 @@ export async function leaveGroup(db: D1Database, phone: string, groupSlug: strin
   return true;
 }
 
-/** STOP: stops all texts to this number. Logged even for numbers we don't know. */
+/**
+ * STOP: stops all texts to this number. An unknown number gets a 'stopped' row
+ * so later web signups, invites, and canned replies all see the opt-out.
+ */
 export async function stopNumber(db: D1Database, phone: string, detail: string): Promise<void> {
   await db.batch([
-    db.prepare(`UPDATE members SET status = 'stopped', updated_at = ${NOW} WHERE phone = ?`).bind(phone),
+    db
+      .prepare(
+        `INSERT INTO members (phone, status) VALUES (?, 'stopped')
+         ON CONFLICT (phone) DO UPDATE SET status = 'stopped', updated_at = ${NOW}`,
+      )
+      .bind(phone),
     db
       .prepare("INSERT INTO consent_log (phone, action, source, detail) VALUES (?, 'stopped', 'sms', ?)")
       .bind(phone, detail),
@@ -228,17 +254,18 @@ export async function stopNumber(db: D1Database, phone: string, detail: string):
  */
 export async function startNumber(db: D1Database, phone: string, detail: string): Promise<Group[]> {
   const member = await findMemberByPhone(db, phone);
-  await db
-    .prepare("INSERT INTO consent_log (phone, action, source, detail) VALUES (?, 'started', 'sms', ?)")
-    .bind(phone, detail)
-    .run();
   if (!member || member.status !== "stopped") return member ? activeGroupsFor(db, phone) : [];
   const { results } = await db
     .prepare("SELECT COUNT(*) AS n FROM memberships WHERE member_id = ? AND status = 'active'")
     .bind(member.id)
     .all<{ n: number }>();
   const next = (results[0]?.n ?? 0) > 0 ? "active" : "pending";
-  await db.prepare(`UPDATE members SET status = ?, updated_at = ${NOW} WHERE id = ?`).bind(next, member.id).run();
+  await db.batch([
+    db.prepare(`UPDATE members SET status = ?, updated_at = ${NOW} WHERE id = ?`).bind(next, member.id),
+    db
+      .prepare("INSERT INTO consent_log (phone, action, source, detail) VALUES (?, 'started', 'sms', ?)")
+      .bind(phone, detail),
+  ]);
   return activeGroupsFor(db, phone);
 }
 
@@ -252,6 +279,48 @@ export async function claimInboundEvent(db: D1Database, telnyxId: string): Promi
     .bind(telnyxId)
     .run();
   return result.meta.changes > 0;
+}
+
+/** Undoes claimInboundEvent so a Telnyx retry is processed after a failure. */
+export async function releaseInboundEvent(db: D1Database, telnyxId: string): Promise<void> {
+  await db.prepare("DELETE FROM inbound_events WHERE telnyx_id = ?").bind(telnyxId).run();
+}
+
+/** Limits on confirmation texts triggered by the public web form. */
+export const WEB_CONFIRMATION_LIMITS = {
+  /** Minimum minutes between confirmation texts to the same number. */
+  perPhoneCooldownMinutes: 10,
+  /** Maximum confirmation texts to one number per day. */
+  perPhonePerDay: 3,
+  /** Maximum confirmation texts across all numbers per hour (SMS-pumping guard). */
+  globalPerHour: 30,
+};
+
+/**
+ * Decides whether a web signup may trigger a confirmation text, and records it if so.
+ * Counts are based on the web_confirmations log, not on signups, so retries can't evade them.
+ */
+export async function allowWebConfirmation(db: D1Database, phone: string): Promise<boolean> {
+  const limits = WEB_CONFIRMATION_LIMITS;
+  const row = await db
+    .prepare(
+      `SELECT
+         SUM(CASE WHEN phone = ?1 AND sent_at >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?2) THEN 1 ELSE 0 END) AS recent,
+         SUM(CASE WHEN phone = ?1 THEN 1 ELSE 0 END) AS today,
+         SUM(CASE WHEN sent_at >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 hour') THEN 1 ELSE 0 END) AS hour
+       FROM web_confirmations WHERE sent_at >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 day')`,
+    )
+    .bind(phone, `-${limits.perPhoneCooldownMinutes} minutes`)
+    .first<{ recent: number | null; today: number | null; hour: number | null }>();
+  if (
+    (row?.recent ?? 0) > 0 ||
+    (row?.today ?? 0) >= limits.perPhonePerDay ||
+    (row?.hour ?? 0) >= limits.globalPerHour
+  ) {
+    return false;
+  }
+  await db.prepare("INSERT INTO web_confirmations (phone) VALUES (?)").bind(phone).run();
+  return true;
 }
 
 /** Stores a non-keyword reply. */

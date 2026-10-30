@@ -88,7 +88,8 @@ describe("POST /join", () => {
       { DB, SIGNUPS_OPEN: "true" },
     );
     expect(res.status).toBe(200);
-    expect(await res.text()).toContain("reply YES");
+    // No Telnyx key in tests, so the text fails and the page says how to finish by SMS.
+    expect(await res.text()).toContain("couldn&#39;t send the confirmation text");
     expect(await findMemberByPhone(DB, "+18015550124")).toMatchObject({ name: "Test Member", status: "pending" });
 
     const again = await postJoin(
@@ -100,7 +101,7 @@ describe("POST /join", () => {
       ],
       { DB, SIGNUPS_OPEN: "true" },
     );
-    expect(await again.text()).toContain("Watch for a text");
+    expect(await again.text()).toContain("already sent a confirmation text to this number recently");
   });
 
   it("tells a stopped number to text START instead of re-opening it", async () => {

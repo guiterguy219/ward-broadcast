@@ -89,7 +89,8 @@ describe("requestSignup", () => {
     const result = await requestSignup(db, { phone: PHONE, groups: ["eq"], source: "sms" });
     expect(result).toEqual({ pendingGroups: ["eq"], alreadyActive: [], stopped: false });
     expect((await findMemberByPhone(db, PHONE))?.status).toBe("pending");
-    expect(membershipRows()).toEqual([{ group_slug: "eq", status: "active" }]);
+    // Needs a fresh YES: the old active membership goes back to pending.
+    expect(membershipRows()).toEqual([{ group_slug: "eq", status: "pending" }]);
   });
 
   it("never overwrites an existing name from a later request", async () => {

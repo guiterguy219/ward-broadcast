@@ -69,3 +69,13 @@ export function leftGroup(program: ProgramConfig, left: Group, remaining: Group[
 export function groupReply(group: Group): string {
   return `${group.sender_name}: ${group.reply_text}`;
 }
+
+/** Reply to LEAVE with no recognizable group. */
+export function leaveHint(program: ProgramConfig, allGroups: Group[]): string {
+  const options = allGroups.map((group) => `LEAVE ${group.keyword}`).join(" or ");
+  return `${program.programName}: Text ${options}, or STOP to stop everything.`;
+}
+
+export function notInGroup(program: ProgramConfig, group: Group): string {
+  return `${program.programName}: You aren't signed up for ${group.sender_name}.`;
+}

@@ -146,18 +146,11 @@ async function handleLeave(
   detail: string,
   reply: Reply,
 ): Promise<InboundOutcome> {
+  const member = await findMemberByPhone(deps.db, from);
+  if (member?.status === "stopped") return { action: "leave", replied: false }; // can't text a stopped number
   const allGroups = await listActiveGroups(deps.db);
   const group = allGroups.find((candidate) => args.includes(candidate.keyword.toUpperCase()));
-  const member = await findMemberByPhone(deps.db, from);
-  if (!group || member?.status === "stopped") {
-    // Can't text a stopped number; for an unknown group, explain the options.
-    if (member?.status === "stopped") return { action: "leave", replied: false };
-    const options = allGroups.map((candidate) => `LEAVE ${candidate.keyword}`).join(" or ");
-    return {
-      action: "leave",
-      replied: await reply(`${deps.program.programName}: Text ${options}, or STOP to stop everything.`),
-    };
-  }
+  if (!group) return { action: "leave", replied: await reply(messages.leaveHint(deps.program, allGroups)) };
   const left = await leaveGroup(deps.db, from, group.slug, detail);
   if (!left) {
     return {
