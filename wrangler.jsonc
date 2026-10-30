@@ -16,6 +16,7 @@
       "migrations_dir": "migrations"
     }
   ],
+  "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "3b51458eb0cb40de8df68f1bed64120c" }],
   "queues": {
     "producers": [{ "binding": "SEND_QUEUE", "queue": "ward-broadcast-send" }],
     "consumers": [
@@ -38,7 +39,9 @@
     // Webhooks are rejected until this is set.
     "TELNYX_PUBLIC_KEY": "",
     // "app": this Worker answers STOP/START/HELP. "telnyx": the messaging profile does.
-    "KEYWORD_REPLIES": "app"
+    "KEYWORD_REPLIES": "app",
+    // Admin name -> SHA-256 hex of a long random passphrase (see src/auth.tsx). Safe to publish.
+    "ADMIN_KEYS": "{\"jared\":\"d8a1ebee0b13767aa19c14857f00eb85b154e0324b48b98f67edb9d5476ad48a\"}"
     // Secret (wrangler secret put): TELNYX_API_KEY
   }
 }

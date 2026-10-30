@@ -1,4 +1,6 @@
+import { OAuthProvider, type OAuthHelpers } from "@cloudflare/workers-oauth-provider";
 import { Hono } from "hono";
+import { ADMIN_SCOPE, showAuthorize, submitAuthorize, type AdminProps } from "./auth";
 import { CONTACT_SERVING_SHORT, formatUsPhone, OPERATOR, PROGRAM_NAME, toE164 } from "./content";
 import {
   allowWebConfirmation,
@@ -12,6 +14,7 @@ import {
 } from "./db";
 import { applyDeliveryStatus, processSendJob, type SendJob } from "./broadcasts";
 import { handleInbound } from "./inbound";
+import { handleMcpRequest } from "./mcp";
 import { confirmRequest, type ProgramConfig } from "./messages";
 import { telnyxSender, verifyTelnyxSignature, type SmsSender, type TelnyxEvent } from "./telnyx";
 import {
@@ -37,6 +40,12 @@ export type Env = {
   TELNYX_PUBLIC_KEY?: string;
   /** "app" (default) or "telnyx": who answers STOP/START/HELP. */
   KEYWORD_REPLIES?: string;
+  /** JSON { adminName: sha256-hex of their passphrase }; see src/auth.tsx. */
+  ADMIN_KEYS?: string;
+  /** OAuth grants and tokens (hashed); managed by workers-oauth-provider. Optional only for tests. */
+  OAUTH_KV?: KVNamespace;
+  /** Injected by OAuthProvider into the default handler at request time. */
+  OAUTH_PROVIDER?: OAuthHelpers;
 };
 
 /** Whether the web signup's confirmation text went out. */
@@ -81,6 +90,8 @@ export function createApp(options: AppOptions = {}) {
   app.get("/terms", (c) => c.html(<TermsPage config={siteConfig(c.env)} />));
   app.get("/privacy", (c) => c.html(<PrivacyPage config={siteConfig(c.env)} />));
   app.get("/healthz", (c) => c.text("ok"));
+  app.get("/authorize", showAuthorize);
+  app.post("/authorize", submitAuthorize);
 
   /**
    * Validates and stores a web signup as pending. The reply-YES confirmation
@@ -256,7 +267,56 @@ export function createQueueHandler(options: AppOptions = {}) {
   };
 }
 
+/** Public origin; the OAuth resource identifier and the {{signup_link}} host. */
+export const ORIGIN = "https://broadcast.gibsonj.net";
+
+/**
+ * The /mcp endpoint, reached only with a valid admin token. OAuthProvider puts
+ * the token's props (the admin's name) on ctx.props.
+ */
+export function createMcpHandler(options: AppOptions = {}) {
+  const makeSender = options.makeSender ?? defaultSender;
+  return {
+    fetch(request: Request, env: Env, ctx: ExecutionContext & { props?: AdminProps }) {
+      const admin = ctx.props?.admin;
+      if (!admin) return new Response("Unauthorized", { status: 401 });
+      return handleMcpRequest(request, {
+        db: env.DB,
+        queue: env.SEND_QUEUE,
+        sender: makeSender(env),
+        program: programConfig(env),
+        signupLink: `${new URL(ORIGIN).host}/join`,
+        admin,
+      });
+    },
+  };
+}
+
+/**
+ * Builds the Worker's fetch entry: OAuth endpoints and /mcp behind tokens,
+ * everything else to the public site.
+ */
+export function createOAuthProvider(options: AppOptions = {}) {
+  const app = createApp(options);
+  return new OAuthProvider<Env>({
+    apiRoute: "/mcp",
+    apiHandler: createMcpHandler(options) as never,
+    defaultHandler: { fetch: (request, env, ctx) => app.fetch(request, env, ctx) },
+    authorizeEndpoint: "/authorize",
+    tokenEndpoint: "/oauth/token",
+    clientRegistrationEndpoint: "/oauth/register",
+    scopesSupported: [ADMIN_SCOPE],
+    requiredScopes: [ADMIN_SCOPE],
+    resourceMetadata: { resource: `${ORIGIN}/mcp`, authorization_servers: [ORIGIN] },
+    // Stay signed in while Claude keeps using it; sign in again after 90 idle days.
+    refreshTokenIdleTTL: 90 * 24 * 60 * 60,
+    refreshTokenTTL: 365 * 24 * 60 * 60,
+  });
+}
+
+const oauthProvider = createOAuthProvider();
+
 export default {
-  fetch: createApp().fetch,
+  fetch: (request, env, ctx) => oauthProvider.fetch(request, env, ctx),
   queue: createQueueHandler(),
 } satisfies ExportedHandler<Env, SendJob>;

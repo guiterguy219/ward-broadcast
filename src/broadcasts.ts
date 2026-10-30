@@ -413,3 +413,34 @@ function randomId(): string {
 }
 
 export { TemplateError };
+
+/** Recent broadcasts with per-status counts, newest first. */
+export async function listBroadcasts(db: D1Database, limit: number) {
+  const { results } = await db
+    .prepare(
+      `SELECT b.id, b.created_at, b.author, b.template_slug, b.groups, b.recipient_count, b.segments, b.status, b.body,
+         (SELECT json_group_object(status, n) FROM (SELECT status, COUNT(*) AS n FROM outbox WHERE broadcast_id = b.id GROUP BY status)) AS counts
+       FROM broadcasts b ORDER BY b.id DESC LIMIT ?`,
+    )
+    .bind(limit)
+    .all<Record<string, unknown> & { groups: string; counts: string }>();
+  return results.map((row) => ({ ...row, groups: JSON.parse(row.groups), counts: JSON.parse(row.counts) }));
+}
+
+/**
+ * Segments that left (sent or delivered) since `since`, and an estimated cost.
+ * Counts every outbound broadcast text; keyword replies aren't stored and aren't included.
+ */
+export async function usageSince(db: D1Database, since: Date) {
+  const { results } = await db
+    .prepare("SELECT text FROM outbox WHERE status IN ('sent', 'delivered') AND updated_at >= ?")
+    .bind(since.toISOString())
+    .all<{ text: string }>();
+  const segments = results.reduce((sum, row) => sum + segmentInfo(row.text).segments, 0);
+  return {
+    since: since.toISOString(),
+    texts: results.length,
+    segments,
+    estimatedCostUsd: Math.round(segments * EST_COST_PER_SEGMENT_USD * 100) / 100,
+  };
+}
