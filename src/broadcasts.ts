@@ -403,7 +403,11 @@ export async function broadcastStatus(db: D1Database, broadcastId: number) {
     .prepare("SELECT status, COUNT(*) AS n FROM outbox WHERE broadcast_id = ? GROUP BY status")
     .bind(broadcastId)
     .all<{ status: string; n: number }>();
-  return { ...broadcast, counts: Object.fromEntries(results.map((row) => [row.status, row.n])) };
+  return {
+    ...broadcast,
+    groups: JSON.parse(String(broadcast.groups)) as string[],
+    counts: Object.fromEntries(results.map((row) => [row.status, row.n])),
+  };
 }
 
 /** 128-bit random hex id. */
@@ -413,3 +417,38 @@ function randomId(): string {
 }
 
 export { TemplateError };
+
+/** Recent broadcasts with per-status counts, newest first. */
+export async function listBroadcasts(db: D1Database, limit: number) {
+  const { results } = await db
+    .prepare(
+      `SELECT b.id, b.created_at, b.author, b.template_slug, b.groups, b.recipient_count, b.segments, b.status, b.body,
+         (SELECT json_group_object(status, n) FROM (SELECT status, COUNT(*) AS n FROM outbox WHERE broadcast_id = b.id GROUP BY status)) AS counts
+       FROM broadcasts b ORDER BY b.id DESC LIMIT ?`,
+    )
+    .bind(limit)
+    .all<Record<string, unknown> & { groups: string; counts: string }>();
+  return results.map((row) => ({ ...row, groups: JSON.parse(row.groups), counts: JSON.parse(row.counts) }));
+}
+
+/**
+ * Texts and segments from broadcasts created since `since`, with an estimated
+ * cost. Counts every text Telnyx accepted (it has an id), including ones that
+ * later failed delivery, since those are still billed. Keyword replies aren't stored.
+ */
+export async function usageSince(db: D1Database, since: Date) {
+  const { results } = await db
+    .prepare(
+      `SELECT o.text FROM outbox o JOIN broadcasts b ON b.id = o.broadcast_id
+       WHERE o.telnyx_id IS NOT NULL AND b.created_at >= ?`,
+    )
+    .bind(since.toISOString())
+    .all<{ text: string }>();
+  const segments = results.reduce((sum, row) => sum + segmentInfo(row.text).segments, 0);
+  return {
+    since: since.toISOString(),
+    texts: results.length,
+    segments,
+    estimatedCostUsd: Math.round(segments * EST_COST_PER_SEGMENT_USD * 100) / 100,
+  };
+}

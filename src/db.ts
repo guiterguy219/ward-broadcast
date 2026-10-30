@@ -368,3 +368,114 @@ export async function recentBroadcastGroups(db: D1Database, phone: string, days:
   const slugs = new Set(JSON.parse(row.groups) as string[]);
   return (await activeGroupsFor(db, phone)).filter((group) => slugs.has(group.slug));
 }
+
+export type MemberListing = {
+  phone: string;
+  name: string | null;
+  status: MemberStatus;
+  groups: { slug: string; status: string }[];
+  joined: string;
+};
+
+/**
+ * Members with their group memberships, for admins.
+ * @param groupSlug only members with a non-'left' membership in this group
+ */
+export async function listMembers(db: D1Database, groupSlug?: string): Promise<MemberListing[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT m.phone, m.name, m.status, m.created_at,
+         (SELECT json_group_array(json_object('slug', ms.group_slug, 'status', ms.status))
+            FROM memberships ms WHERE ms.member_id = m.id AND ms.status <> 'left') AS groups
+       FROM members m
+       WHERE ?1 IS NULL OR EXISTS (
+         SELECT 1 FROM memberships ms WHERE ms.member_id = m.id AND ms.group_slug = ?1 AND ms.status <> 'left')
+       ORDER BY m.name IS NULL, m.name, m.phone`,
+    )
+    .bind(groupSlug ?? null)
+    .all<{ phone: string; name: string | null; status: MemberStatus; created_at: string; groups: string }>();
+  return results.map((row) => ({
+    phone: row.phone,
+    name: row.name,
+    status: row.status,
+    groups: JSON.parse(row.groups) as { slug: string; status: string }[],
+    joined: row.created_at,
+  }));
+}
+
+/**
+ * Admin removal (e.g. a member asked in person). Leaves the given groups, or all
+ * of them, and logs it. Does not mark the number stopped; only the member can do that.
+ * @returns the group slugs that were actually removed
+ */
+export async function removeMember(
+  db: D1Database,
+  input: { phone: string; groups?: string[]; actor: string; reason: string },
+): Promise<string[]> {
+  const member = await findMemberByPhone(db, input.phone);
+  if (!member) return [];
+  const { results } = await db
+    .prepare("SELECT group_slug FROM memberships WHERE member_id = ? AND status <> 'left'")
+    .bind(member.id)
+    .all<{ group_slug: string }>();
+  const targets = results
+    .map((row) => row.group_slug)
+    .filter((slug) => input.groups === undefined || input.groups.includes(slug));
+  if (targets.length === 0) return [];
+  await db.batch(
+    targets.flatMap((slug) => [
+      db
+        .prepare(`UPDATE memberships SET status = 'left', updated_at = ${NOW} WHERE member_id = ? AND group_slug = ?`)
+        .bind(member.id, slug),
+      db
+        .prepare(
+          "INSERT INTO consent_log (phone, action, group_slug, source, actor, detail) VALUES (?, 'removed', ?, 'admin', ?, ?)",
+        )
+        .bind(input.phone, slug, input.actor, input.reason),
+    ]),
+  );
+  return targets;
+}
+
+/** Most recent non-keyword replies, newest first. */
+export async function listReplies(db: D1Database, limit: number) {
+  const { results } = await db
+    .prepare(
+      `SELECT r.received_at, r.phone, m.name, r.text, r.auto_replied
+       FROM replies r LEFT JOIN members m ON m.id = r.member_id
+       ORDER BY r.received_at DESC, r.id DESC LIMIT ?`,
+    )
+    .bind(limit)
+    .all<{ received_at: string; phone: string; name: string | null; text: string; auto_replied: number }>();
+  return results;
+}
+
+/** Active (receiving) member count per group slug. */
+export async function activeCountsByGroup(db: D1Database): Promise<Record<string, number>> {
+  const { results } = await db
+    .prepare(
+      `SELECT ms.group_slug, COUNT(*) AS n FROM memberships ms JOIN members m ON m.id = ms.member_id
+       WHERE m.status = 'active' AND ms.status = 'active' GROUP BY ms.group_slug`,
+    )
+    .all<{ group_slug: string; n: number }>();
+  return Object.fromEntries(results.map((row) => [row.group_slug, row.n]));
+}
+
+/** Failed sign-in attempts allowed per IP per hour before the form refuses. */
+export const MAX_AUTH_FAILURES_PER_HOUR = 10;
+
+/** True if this IP has too many recent failed passphrase attempts. */
+export async function authLockedOut(db: D1Database, ip: string): Promise<boolean> {
+  const row = await db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM auth_failures
+       WHERE ip = ? AND failed_at >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 hour')`,
+    )
+    .bind(ip)
+    .first<{ n: number }>();
+  return (row?.n ?? 0) >= MAX_AUTH_FAILURES_PER_HOUR;
+}
+
+export async function recordAuthFailure(db: D1Database, ip: string): Promise<void> {
+  await db.prepare("INSERT INTO auth_failures (ip) VALUES (?)").bind(ip).run();
+}
