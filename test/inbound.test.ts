@@ -3,7 +3,7 @@ import { findMemberByPhone } from "../src/db";
 import { createApp, type Env } from "../src/index";
 import { parseInbound } from "../src/inbound";
 import { createTestDb } from "./d1";
-import { createWebhookSigner, FakeSender, inboundEvent } from "./fakes";
+import { createWebhookSigner, FakeQueue, FakeSender, inboundEvent } from "./fakes";
 
 const PHONE = "+18015550123";
 
@@ -40,6 +40,7 @@ describe("inbound texts via the webhook", () => {
     sender = new FakeSender();
     env = {
       DB: test.db,
+      SEND_QUEUE: new FakeQueue() as unknown as Env["SEND_QUEUE"],
       SIGNUPS_OPEN: "true",
       TEXT_NUMBER: "+13858959493",
       CONTACT_EMAIL: "test@example.com",

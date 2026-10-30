@@ -10,6 +10,7 @@ import {
   type Group,
   type SignupResult,
 } from "./db";
+import { applyDeliveryStatus, processSendJob, type SendJob } from "./broadcasts";
 import { handleInbound } from "./inbound";
 import { confirmRequest, type ProgramConfig } from "./messages";
 import { telnyxSender, verifyTelnyxSignature, type SmsSender, type TelnyxEvent } from "./telnyx";
@@ -25,6 +26,8 @@ import {
 
 export type Env = {
   DB: D1Database;
+  /** Fan-out queue; each message is one chunk of outbox rows. */
+  SEND_QUEUE: Queue<SendJob>;
   SIGNUPS_OPEN: string;
   TEXT_NUMBER: string;
   CONTACT_EMAIL: string;
@@ -191,6 +194,12 @@ export function createApp(options: AppOptions = {}) {
     }
     const type = event.data?.event_type ?? "unknown";
     const payload = event.data?.payload;
+    if (type === "message.finalized" && payload?.id) {
+      const recipient = payload.to?.[0];
+      const error = payload.errors?.map((item) => [item.code, item.title].filter(Boolean).join(" ")).join("; ");
+      await applyDeliveryStatus(c.env.DB, payload.id, recipient?.status ?? "unknown", error || undefined);
+      return c.json({ received: true });
+    }
     if (type !== "message.received") {
       console.log("telnyx webhook", type);
       return c.json({ received: true });
@@ -226,4 +235,28 @@ export function createApp(options: AppOptions = {}) {
   return app;
 }
 
-export default createApp();
+/**
+ * Queue consumer: sends each chunk and retries it (with backoff) if any
+ * recipient hit a transient error. Rows already sent are skipped on retry.
+ */
+export function createQueueHandler(options: AppOptions = {}) {
+  const makeSender = options.makeSender ?? defaultSender;
+  return async (batch: MessageBatch<SendJob>, env: Env): Promise<void> => {
+    const sender = makeSender(env);
+    for (const message of batch.messages) {
+      try {
+        const retry = await processSendJob(env.DB, sender, message.body);
+        if (retry) message.retry({ delaySeconds: 30 });
+        else message.ack();
+      } catch (error) {
+        console.error("send job failed", message.body.broadcastId, (error as Error).message);
+        message.retry({ delaySeconds: 30 });
+      }
+    }
+  };
+}
+
+export default {
+  fetch: createApp().fetch,
+  queue: createQueueHandler(),
+} satisfies ExportedHandler<Env, SendJob>;

@@ -51,3 +51,23 @@ export function inboundEvent(from: string, text: string, id = `in-${++inboundCou
     },
   });
 }
+
+/** Collects queue messages instead of delivering them; drain() runs them through a consumer. */
+export class FakeQueue<T> {
+  messages: T[] = [];
+
+  async send(body: T) {
+    this.messages.push(body);
+  }
+
+  async sendBatch(batch: Iterable<{ body: T }>) {
+    for (const item of batch) this.messages.push(item.body);
+  }
+
+  /** Removes and returns everything queued so far. */
+  take(): T[] {
+    const taken = this.messages;
+    this.messages = [];
+    return taken;
+  }
+}
