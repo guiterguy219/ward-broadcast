@@ -37,7 +37,7 @@
     "CONTACT_EMAIL": "broadcast@gibsonj.net",
     // Base64 Ed25519 key from Telnyx portal > Keys & Credentials > Public Key (not secret).
     // Webhooks are rejected until this is set.
-    "TELNYX_PUBLIC_KEY": "",
+    "TELNYX_PUBLIC_KEY": "cXlTVrcLQT7DNQZTyBky5B1kDBOvF+8R6jupHZ6fbKY=",
     // "app": this Worker answers STOP/START/HELP. "telnyx": the messaging profile does.
     "KEYWORD_REPLIES": "app",
     // Admin name -> SHA-256 hex of a long random passphrase (see src/auth.tsx). Safe to publish.

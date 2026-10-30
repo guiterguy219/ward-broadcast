@@ -11,7 +11,7 @@ Last reviewed: 2026-10-29.
 | Account level | Paid | Done |
 | Phone number | +1 (385) 895-9493, local Payson number | Active |
 | Messaging profile | "GibsonJ Broadcast - Payson 10th Ward" | Number assigned |
-| Inbound webhook | `https://broadcast.gibsonj.net/api/webhook` | Set; app acknowledges events only |
+| Inbound webhook | `https://broadcast.gibsonj.net/api/webhook` | Set; verified with the Ed25519 public key |
 | Failover webhook | none | Not set |
 | 10DLC brand (sole proprietor) | — | Not registered |
 | 10DLC campaign | — | Not submitted |
@@ -24,7 +24,7 @@ Until the campaign is approved and the number is attached to it, texts to anyone
 | Setting | Where | Value |
 | --- | --- | --- |
 | Webhook API version | Messaging profile | v2 (signed with Ed25519; v1 is unsigned and will be rejected) |
-| Webhook public key | `TELNYX_PUBLIC_KEY` var in `wrangler.jsonc` | From portal > Account Settings > Keys & Credentials > Public Key. Not set yet; the webhook rejects everything until it is. |
+| Webhook public key | `TELNYX_PUBLIC_KEY` var in `wrangler.jsonc` | From portal > Account Settings > Keys & Credentials > Public Key. Set 2026-10-29. |
 | API key | Worker secret `TELNYX_API_KEY` | Same value as Infisical `GIBSONJ_PERSONAL_TELNYX_API_KEY` |
 | Keyword replies | `KEYWORD_REPLIES` var | `app`: the Worker answers STOP/START/HELP with the texts below. If the messaging profile's own keyword auto-responses get turned on, set this to `telnyx` so members don't get two replies. |
 
