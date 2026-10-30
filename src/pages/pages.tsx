@@ -1,13 +1,4 @@
-import {
-  EFFECTIVE_DATE,
-  FREQUENCY,
-  KEYWORDS,
-  OPERATOR,
-  PROGRAM_NAME,
-  RATES,
-  SERVING,
-  formatUsPhone,
-} from "../content";
+import { EFFECTIVE_DATE, FREQUENCY, KEYWORDS, OPERATOR, PROGRAM_NAME, RATES, SERVING, formatUsPhone } from "../content";
 import type { Group } from "../db";
 import { Layout } from "./Layout";
 
@@ -45,8 +36,7 @@ export function HomePage({ config }: { config: SiteConfig }) {
     <Layout title="Home">
       <h1>Group announcements, sent as plain texts</h1>
       <p class="lead">
-        Lesson reminders, service requests, and activity news, with no app to install. Currently
-        serving the {SERVING}.
+        Lesson reminders, service requests, and activity news, with no app to install. Currently serving the {SERVING}.
       </p>
       <div class="actions">
         <a class="button" href="/join">
@@ -84,8 +74,8 @@ export function HomePage({ config }: { config: SiteConfig }) {
 
       <h2>Questions?</h2>
       <p>
-        Email <a href={`mailto:${config.contactEmail}`}>{config.contactEmail}</a>, or talk to a
-        member of your quorum or Relief Society presidency. {PROGRAM_NAME} is run by {OPERATOR}.
+        Email <a href={`mailto:${config.contactEmail}`}>{config.contactEmail}</a>, or talk to a member of your quorum or
+        Relief Society presidency. {PROGRAM_NAME} is run by {OPERATOR}.
       </p>
     </Layout>
   );
@@ -141,10 +131,8 @@ export function JoinPage({
         {errorCount > 0 && (
           <div class="notice notice-error" role="alert">
             <p>
-              <strong>
-                {errorCount === 1 ? "One thing needs fixing" : `${errorCount} things need fixing`}
-              </strong>{" "}
-              before you can sign up.
+              <strong>{errorCount === 1 ? "One thing needs fixing" : `${errorCount} things need fixing`}</strong> before
+              you can sign up.
             </p>
           </div>
         )}
@@ -195,12 +183,7 @@ export function JoinPage({
           <div class="options">
             {groups.map((group) => (
               <label class="option">
-                <input
-                  type="checkbox"
-                  name="groups"
-                  value={group.slug}
-                  checked={form.groups.includes(group.slug)}
-                />
+                <input type="checkbox" name="groups" value={group.slug} checked={form.groups.includes(group.slug)} />
                 <span class="option-text">
                   <strong>{group.name}</strong>
                   <span>{GROUP_BLURBS[group.slug] ?? "Lessons, service requests, activities"}</span>
@@ -222,8 +205,8 @@ export function JoinPage({
             />
             <span>
               I agree to receive recurring text messages from {PROGRAM_NAME} at this number for the groups I chose.{" "}
-              {FREQUENCY} {RATES} {KEYWORDS} Signing up is never required to take part in the ward.
-              See the <a href="/terms">terms</a> and <a href="/privacy">privacy policy</a>.
+              {FREQUENCY} {RATES} {KEYWORDS} Signing up is never required to take part in the ward. See the{" "}
+              <a href="/terms">terms</a> and <a href="/privacy">privacy policy</a>.
             </span>
           </label>
           <FieldError id="consent-error" message={errors.consent} />
@@ -250,16 +233,14 @@ export function TermsPage({ config }: { config: SiteConfig }) {
         <p class="effective">Effective {EFFECTIVE_DATE}</p>
         <h2>What this is</h2>
         <p>
-          {PROGRAM_NAME} is a personal text service run by {OPERATOR}. It currently sends recurring
-          text messages to members of the {SERVING} who sign up: lesson reminders, service
-          requests, and activity announcements. Messages start with the group name, such as
-          "Payson 10th Ward EQ:".
+          {PROGRAM_NAME} is a personal text service run by {OPERATOR}. It currently sends recurring text messages to
+          members of the {SERVING} who sign up: lesson reminders, service requests, and activity announcements. Messages
+          start with the group name, such as "Payson 10th Ward EQ:".
         </p>
         <h2>Signing up</h2>
         <p>
-          Sign up on this website, by texting JOIN EQ or JOIN RS to our number, or by asking a
-          presidency member to add you. Every sign-up is confirmed by text, and you're subscribed
-          only after you reply YES.
+          Sign up on this website, by texting JOIN EQ or JOIN RS to our number, or by asking a presidency member to add
+          you. Every sign-up is confirmed by text, and you're subscribed only after you reply YES.
         </p>
         <h2>Frequency and cost</h2>
         <p>
@@ -267,24 +248,23 @@ export function TermsPage({ config }: { config: SiteConfig }) {
         </p>
         <h2>Opting out and help</h2>
         <p>
-          Reply STOP to stop all messages; you'll get one confirmation text. Reply LEAVE EQ or LEAVE
-          RS to leave one group. Reply START to rejoin. Reply HELP for contact information, or email{" "}
+          Reply STOP to stop all messages; you'll get one confirmation text. Reply LEAVE EQ or LEAVE RS to leave one
+          group. Reply START to rejoin. Reply HELP for contact information, or email{" "}
           <a href={`mailto:${config.contactEmail}`}>{config.contactEmail}</a>.
         </p>
         <h2>Replies</h2>
         <p>
-          This number sends announcements only. Replies get an automatic message with presidency
-          contact information.
+          This number sends announcements only. Replies get an automatic message with presidency contact information.
         </p>
         <h2>Acceptable use</h2>
         <p>
-          Messages are only for quorum and Relief Society business. They are never used for
-          political, commercial, or personal purposes.
+          Messages are only for quorum and Relief Society business. They are never used for political, commercial, or
+          personal purposes.
         </p>
         <h2>Delivery</h2>
         <p>
-          Carriers are not liable for delayed or undelivered messages. Delivery isn't guaranteed and
-          may depend on your carrier and phone settings.
+          Carriers are not liable for delayed or undelivered messages. Delivery isn't guaranteed and may depend on your
+          carrier and phone settings.
         </p>
         <h2>Privacy</h2>
         <p>
@@ -311,25 +291,25 @@ export function PrivacyPage({ config }: { config: SiteConfig }) {
         <p>We don't collect anything from Church records or directories. You give us your number.</p>
         <h2>How we use it</h2>
         <p>
-          Only to send the {PROGRAM_NAME} texts you signed up for and to answer HELP and STOP
-          requests. Only {OPERATOR} and the presidency members who send these texts can see the
-          list.
+          Only to send the {PROGRAM_NAME} texts you signed up for and to answer HELP and STOP requests. Only {OPERATOR}{" "}
+          and the presidency members who send these texts can see the list.
         </p>
         <h2>Sharing</h2>
         <p>
-          We do not sell, rent, or share your information. No mobile information will be shared with
-          third parties or affiliates for marketing or promotional purposes. Text messaging opt-in
-          data and consent are not shared with any third parties.
+          We do not sell, rent, or share your information. No mobile information will be shared with third parties or
+          affiliates for marketing or promotional purposes. Text messaging opt-in data and consent are not shared with
+          any third parties.
         </p>
         <p>
-          Two service providers process your number only to run this service: Telnyx, which
-          delivers the texts, and Cloudflare, which hosts this site and its data.
+          Two service providers process your number only to run this service: Telnyx, which delivers the texts, and
+          Cloudflare, which hosts this site and its data.
         </p>
         <h2>Keeping and deleting it</h2>
         <p>
-          If you opt out, we stop texting you and delete your name and group memberships. We keep
-          the opt-out record so we never text you again by mistake. To have everything deleted,
-          email <a href={`mailto:${config.contactEmail}`}>{config.contactEmail}</a>.
+          If you text STOP, we stop texting you right away. We keep your number, name, groups, and the opt-out record so
+          we never text you again by mistake and can restore your groups if you text START. To have your name and groups
+          deleted, email <a href={`mailto:${config.contactEmail}`}>{config.contactEmail}</a>; we keep only the opt-out
+          record.
         </p>
       </div>
     </Layout>

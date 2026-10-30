@@ -29,9 +29,7 @@ const NOW = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
 
 /** All groups that accept members, in a stable order. */
 export async function listActiveGroups(db: D1Database): Promise<Group[]> {
-  const { results } = await db
-    .prepare("SELECT * FROM groups WHERE active = 1 ORDER BY slug")
-    .all<Group>();
+  const { results } = await db.prepare("SELECT * FROM groups WHERE active = 1 ORDER BY slug").all<Group>();
   return results;
 }
 
@@ -119,28 +117,254 @@ export async function requestSignup(db: D1Database, request: SignupRequest): Pro
     )
     .bind(request.phone, request.name?.trim() || null, request.source);
 
+  // Runs after the member upsert in the same batch, so the member's status here is the new one:
+  // an active membership stays active only while the member is active.
   const membershipUpserts = pendingGroups.map((slug) =>
     db
       .prepare(
         `INSERT INTO memberships (member_id, group_slug, status)
          VALUES ((SELECT id FROM members WHERE phone = ?1), ?2, 'pending')
          ON CONFLICT (member_id, group_slug) DO UPDATE SET
-           status = CASE WHEN memberships.status = 'active' THEN 'active' ELSE 'pending' END,
+           status = CASE WHEN memberships.status = 'active'
+                          AND (SELECT status FROM members WHERE phone = ?1) = 'active'
+                         THEN 'active' ELSE 'pending' END,
            updated_at = ${NOW}`,
       )
       .bind(request.phone, slug),
   );
+  // Re-joining by SMS after STOP is a fresh opt-in for just these groups; START is what restores all.
+  const reopening = existing?.status === "stopped" && request.source === "sms";
+  if (reopening) {
+    const placeholders = groupSlugs.map(() => "?").join(", ");
+    membershipUpserts.push(
+      db
+        .prepare(
+          `UPDATE memberships SET status = 'left', updated_at = ${NOW}
+           WHERE member_id = ? AND status = 'active' AND group_slug NOT IN (${placeholders})`,
+        )
+        .bind(existing.id, ...groupSlugs),
+    );
+  }
 
   const action = request.source === "admin" ? "invited" : "join_requested";
   const detail = stopped ? `${request.detail ?? ""} [number is stopped; not re-opened]`.trim() : request.detail;
   const consentRows = loggedGroups.map((slug) =>
     db
-      .prepare(
-        "INSERT INTO consent_log (phone, action, group_slug, source, actor, detail) VALUES (?, ?, ?, ?, ?, ?)",
-      )
+      .prepare("INSERT INTO consent_log (phone, action, group_slug, source, actor, detail) VALUES (?, ?, ?, ?, ?, ?)")
       .bind(request.phone, action, slug, request.source, request.actor ?? null, detail ?? null),
   );
 
   await db.batch([memberUpsert, ...membershipUpserts, ...consentRows]);
   return { pendingGroups, alreadyActive, stopped };
+}
+
+/** Groups this number is actively receiving (member active and membership active). */
+export async function activeGroupsFor(db: D1Database, phone: string): Promise<Group[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT g.* FROM groups g
+       JOIN memberships ms ON ms.group_slug = g.slug AND ms.status = 'active'
+       JOIN members m ON m.id = ms.member_id AND m.status = 'active'
+       WHERE m.phone = ? ORDER BY g.slug`,
+    )
+    .bind(phone)
+    .all<Group>();
+  return results;
+}
+
+/**
+ * Activates every pending membership after the member replies YES.
+ * A stopped number is never confirmed; it must text START or JOIN first.
+ * @returns the groups that became active (empty if nothing was pending)
+ */
+export async function confirmPending(db: D1Database, phone: string, detail: string): Promise<Group[]> {
+  const member = await findMemberByPhone(db, phone);
+  if (!member || member.status === "stopped") return [];
+  const { results: pending } = await db
+    .prepare(
+      `SELECT g.* FROM groups g JOIN memberships ms ON ms.group_slug = g.slug
+       WHERE ms.member_id = ? AND ms.status = 'pending' AND g.active = 1 ORDER BY g.slug`,
+    )
+    .bind(member.id)
+    .all<Group>();
+  if (pending.length === 0) return [];
+
+  const placeholders = pending.map(() => "?").join(", ");
+  await db.batch([
+    db
+      .prepare(
+        `UPDATE memberships SET status = 'active', updated_at = ${NOW}
+         WHERE member_id = ? AND status = 'pending' AND group_slug IN (${placeholders})`,
+      )
+      .bind(member.id, ...pending.map((group) => group.slug)),
+    db.prepare(`UPDATE members SET status = 'active', updated_at = ${NOW} WHERE id = ?`).bind(member.id),
+    ...pending.map((group) =>
+      db
+        .prepare(
+          "INSERT INTO consent_log (phone, action, group_slug, source, detail) VALUES (?, 'confirmed', ?, 'sms', ?)",
+        )
+        .bind(phone, group.slug, detail),
+    ),
+  ]);
+  return pending;
+}
+
+/**
+ * Removes one group for a member (LEAVE EQ). Other groups are untouched.
+ * @returns true if the member was in that group (active or pending)
+ */
+export async function leaveGroup(db: D1Database, phone: string, groupSlug: string, detail: string): Promise<boolean> {
+  const result = await db
+    .prepare(
+      `UPDATE memberships SET status = 'left', updated_at = ${NOW}
+       WHERE group_slug = ?2 AND status <> 'left'
+         AND member_id = (SELECT id FROM members WHERE phone = ?1)`,
+    )
+    .bind(phone, groupSlug)
+    .run();
+  if (result.meta.changes === 0) return false;
+  await db
+    .prepare("INSERT INTO consent_log (phone, action, group_slug, source, detail) VALUES (?, 'left', ?, 'sms', ?)")
+    .bind(phone, groupSlug, detail)
+    .run();
+  return true;
+}
+
+/**
+ * STOP: stops all texts to this number. An unknown number gets a 'stopped' row
+ * so later web signups, invites, and canned replies all see the opt-out.
+ */
+export async function stopNumber(db: D1Database, phone: string, detail: string): Promise<void> {
+  await db.batch([
+    db
+      .prepare(
+        `INSERT INTO members (phone, status) VALUES (?, 'stopped')
+         ON CONFLICT (phone) DO UPDATE SET status = 'stopped', updated_at = ${NOW}`,
+      )
+      .bind(phone),
+    db
+      .prepare("INSERT INTO consent_log (phone, action, source, detail) VALUES (?, 'stopped', 'sms', ?)")
+      .bind(phone, detail),
+  ]);
+}
+
+/**
+ * START: turns texts back on for a stopped number, restoring its active memberships.
+ * @returns the groups the member is receiving again (empty if none or not stopped)
+ */
+export async function startNumber(db: D1Database, phone: string, detail: string): Promise<Group[]> {
+  const member = await findMemberByPhone(db, phone);
+  if (!member || member.status !== "stopped") return member ? activeGroupsFor(db, phone) : [];
+  const { results } = await db
+    .prepare("SELECT COUNT(*) AS n FROM memberships WHERE member_id = ? AND status = 'active'")
+    .bind(member.id)
+    .all<{ n: number }>();
+  const next = (results[0]?.n ?? 0) > 0 ? "active" : "pending";
+  await db.batch([
+    db.prepare(`UPDATE members SET status = ?, updated_at = ${NOW} WHERE id = ?`).bind(next, member.id),
+    db
+      .prepare("INSERT INTO consent_log (phone, action, source, detail) VALUES (?, 'started', 'sms', ?)")
+      .bind(phone, detail),
+  ]);
+  return activeGroupsFor(db, phone);
+}
+
+/**
+ * Marks an inbound Telnyx message as handled.
+ * @returns false if it was already handled (a webhook retry)
+ */
+export async function claimInboundEvent(db: D1Database, telnyxId: string): Promise<boolean> {
+  const result = await db
+    .prepare("INSERT INTO inbound_events (telnyx_id) VALUES (?) ON CONFLICT (telnyx_id) DO NOTHING")
+    .bind(telnyxId)
+    .run();
+  return result.meta.changes > 0;
+}
+
+/** Undoes claimInboundEvent so a Telnyx retry is processed after a failure. */
+export async function releaseInboundEvent(db: D1Database, telnyxId: string): Promise<void> {
+  await db.prepare("DELETE FROM inbound_events WHERE telnyx_id = ?").bind(telnyxId).run();
+}
+
+/** Limits on confirmation texts triggered by the public web form. */
+export const WEB_CONFIRMATION_LIMITS = {
+  /** Minimum minutes between confirmation texts to the same number. */
+  perPhoneCooldownMinutes: 10,
+  /** Maximum confirmation texts to one number per day. */
+  perPhonePerDay: 3,
+  /** Maximum confirmation texts across all numbers per hour (SMS-pumping guard). */
+  globalPerHour: 30,
+};
+
+/**
+ * Decides whether a web signup may trigger a confirmation text, and records it if so.
+ * Counts are based on the web_confirmations log, not on signups, so retries can't evade them.
+ */
+export async function allowWebConfirmation(db: D1Database, phone: string): Promise<boolean> {
+  const limits = WEB_CONFIRMATION_LIMITS;
+  const row = await db
+    .prepare(
+      `SELECT
+         SUM(CASE WHEN phone = ?1 AND sent_at >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?2) THEN 1 ELSE 0 END) AS recent,
+         SUM(CASE WHEN phone = ?1 THEN 1 ELSE 0 END) AS today,
+         SUM(CASE WHEN sent_at >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 hour') THEN 1 ELSE 0 END) AS hour
+       FROM web_confirmations WHERE sent_at >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 day')`,
+    )
+    .bind(phone, `-${limits.perPhoneCooldownMinutes} minutes`)
+    .first<{ recent: number | null; today: number | null; hour: number | null }>();
+  if (
+    (row?.recent ?? 0) > 0 ||
+    (row?.today ?? 0) >= limits.perPhonePerDay ||
+    (row?.hour ?? 0) >= limits.globalPerHour
+  ) {
+    return false;
+  }
+  await db.prepare("INSERT INTO web_confirmations (phone) VALUES (?)").bind(phone).run();
+  return true;
+}
+
+/** Stores a non-keyword reply. */
+export async function recordReply(
+  db: D1Database,
+  reply: { phone: string; text: string; autoReplied: boolean },
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO replies (phone, member_id, text, auto_replied)
+       VALUES (?1, (SELECT id FROM members WHERE phone = ?1), ?2, ?3)`,
+    )
+    .bind(reply.phone, reply.text, reply.autoReplied ? 1 : 0)
+    .run();
+}
+
+/** True if this number got a canned reply within the last `hours` (loop guard). */
+export async function autoRepliedWithin(db: D1Database, phone: string, hours: number): Promise<boolean> {
+  const row = await db
+    .prepare(
+      `SELECT 1 AS hit FROM replies WHERE phone = ? AND auto_replied = 1
+       AND received_at >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?) LIMIT 1`,
+    )
+    .bind(phone, `-${hours} hours`)
+    .first<{ hit: number }>();
+  return row !== null;
+}
+
+/**
+ * Groups of the most recent broadcast that reached this number within `days`,
+ * limited to groups the number still belongs to. Used to pick which group's
+ * canned reply to send.
+ */
+export async function recentBroadcastGroups(db: D1Database, phone: string, days: number): Promise<Group[]> {
+  const row = await db
+    .prepare(
+      `SELECT b.groups FROM outbox o JOIN broadcasts b ON b.id = o.broadcast_id
+       WHERE o.phone = ? AND o.status IN ('sent', 'delivered')
+         AND b.created_at >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?)
+       ORDER BY b.created_at DESC, b.id DESC LIMIT 1`,
+    )
+    .bind(phone, `-${days} days`)
+    .first<{ groups: string }>();
+  if (!row) return [];
+  const slugs = new Set(JSON.parse(row.groups) as string[]);
+  return (await activeGroupsFor(db, phone)).filter((group) => slugs.has(group.slug));
 }

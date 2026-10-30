@@ -21,6 +21,12 @@
     "SIGNUPS_OPEN": "false",
     // E.164 Telnyx number; leave empty to hide the "text JOIN" line.
     "TEXT_NUMBER": "+13858959493",
-    "CONTACT_EMAIL": "broadcast@gibsonj.net"
+    "CONTACT_EMAIL": "broadcast@gibsonj.net",
+    // Base64 Ed25519 key from Telnyx portal > Keys & Credentials > Public Key (not secret).
+    // Webhooks are rejected until this is set.
+    "TELNYX_PUBLIC_KEY": "",
+    // "app": this Worker answers STOP/START/HELP. "telnyx": the messaging profile does.
+    "KEYWORD_REPLIES": "app"
+    // Secret (wrangler secret put): TELNYX_API_KEY
   }
 }

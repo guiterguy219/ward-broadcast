@@ -34,7 +34,11 @@ class Statement {
 
   async run() {
     const info = this.sqlite.prepare(this.sql).run(...this.params);
-    return { success: true, results: [], meta: { changes: Number(info.changes), last_row_id: Number(info.lastInsertRowid) } };
+    return {
+      success: true,
+      results: [],
+      meta: { changes: Number(info.changes), last_row_id: Number(info.lastInsertRowid) },
+    };
   }
 
   /** Executes inside an open transaction (batch); returns the D1-shaped result. */
@@ -44,7 +48,11 @@ class Statement {
       return { results: statement.all(...this.params), success: true, meta: {} };
     }
     const info = statement.run(...this.params);
-    return { results: [], success: true, meta: { changes: Number(info.changes), last_row_id: Number(info.lastInsertRowid) } };
+    return {
+      results: [],
+      success: true,
+      meta: { changes: Number(info.changes), last_row_id: Number(info.lastInsertRowid) },
+    };
   }
 }
 
@@ -81,7 +89,9 @@ class TestD1 {
 export function createTestDb(): { db: D1Database; sqlite: DatabaseSync } {
   const sqlite = new DatabaseSync(":memory:");
   sqlite.exec("PRAGMA foreign_keys = ON");
-  const files = readdirSync(MIGRATIONS_DIR).filter((file) => file.endsWith(".sql")).sort();
+  const files = readdirSync(MIGRATIONS_DIR)
+    .filter((file) => file.endsWith(".sql"))
+    .sort();
   for (const file of files) sqlite.exec(readFileSync(join(MIGRATIONS_DIR, file), "utf8"));
   return { db: new TestD1(sqlite) as unknown as D1Database, sqlite };
 }

@@ -19,6 +19,15 @@ Last reviewed: 2026-10-29.
 
 Until the campaign is approved and the number is attached to it, texts to anyone else's phone will be blocked.
 
+## App configuration
+
+| Setting | Where | Value |
+| --- | --- | --- |
+| Webhook API version | Messaging profile | v2 (signed with Ed25519; v1 is unsigned and will be rejected) |
+| Webhook public key | `TELNYX_PUBLIC_KEY` var in `wrangler.jsonc` | From portal > Account Settings > Keys & Credentials > Public Key. Not set yet; the webhook rejects everything until it is. |
+| API key | Worker secret `TELNYX_API_KEY` | Same value as Infisical `GIBSONJ_PERSONAL_TELNYX_API_KEY` |
+| Keyword replies | `KEYWORD_REPLIES` var | `app`: the Worker answers STOP/START/HELP with the texts below. If the messaging profile's own keyword auto-responses get turned on, set this to `telnyx` so members don't get two replies. |
+
 ## Pending changes (not applied in Telnyx yet)
 
 The site was rebranded to **GibsonJ Broadcast** on 2026-10-29. When the brand and campaign are registered, use the GibsonJ Broadcast wording below. If an earlier campaign was already submitted with "Payson 10th Ward" wording, let it finish review and update the auto-response texts afterward; resubmitting costs another $15 vetting fee.
@@ -88,3 +97,4 @@ Every broadcast starts with the group's sender name and, when it fits, ends with
 
 - Bishop approval (General Handbook 38.8.21.2) and a second admin.
 - Set `SIGNUPS_OPEN` to `"true"` in `wrangler.jsonc` once texting is built and the campaign is approved.
+- Add a Cloudflare Turnstile check to `/join` before opening it; per-number and global confirmation-text limits are already in place.

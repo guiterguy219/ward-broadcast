@@ -89,7 +89,8 @@ describe("requestSignup", () => {
     const result = await requestSignup(db, { phone: PHONE, groups: ["eq"], source: "sms" });
     expect(result).toEqual({ pendingGroups: ["eq"], alreadyActive: [], stopped: false });
     expect((await findMemberByPhone(db, PHONE))?.status).toBe("pending");
-    expect(membershipRows()).toEqual([{ group_slug: "eq", status: "active" }]);
+    // Needs a fresh YES: the old active membership goes back to pending.
+    expect(membershipRows()).toEqual([{ group_slug: "eq", status: "pending" }]);
   });
 
   it("never overwrites an existing name from a later request", async () => {
@@ -99,8 +100,16 @@ describe("requestSignup", () => {
   });
 
   it("logs admin invites with the acting admin", async () => {
-    await requestSignup(db, { phone: PHONE, groups: ["eq"], source: "admin", actor: "jared", detail: "asked at church" });
-    expect(consentRows()).toEqual([{ phone: PHONE, action: "invited", group_slug: "eq", source: "admin", actor: "jared" }]);
+    await requestSignup(db, {
+      phone: PHONE,
+      groups: ["eq"],
+      source: "admin",
+      actor: "jared",
+      detail: "asked at church",
+    });
+    expect(consentRows()).toEqual([
+      { phone: PHONE, action: "invited", group_slug: "eq", source: "admin", actor: "jared" },
+    ]);
   });
 
   it("rejects unknown or inactive groups without writing anything", async () => {
@@ -108,7 +117,9 @@ describe("requestSignup", () => {
       UnknownGroupError,
     );
     sqlite.prepare("UPDATE groups SET active = 0 WHERE slug = 'rs'").run();
-    await expect(requestSignup(db, { phone: PHONE, groups: ["rs"], source: "web" })).rejects.toThrow("Unknown group: rs");
+    await expect(requestSignup(db, { phone: PHONE, groups: ["rs"], source: "web" })).rejects.toThrow(
+      "Unknown group: rs",
+    );
     await expect(requestSignup(db, { phone: PHONE, groups: [], source: "web" })).rejects.toThrow(UnknownGroupError);
     expect(await findMemberByPhone(db, PHONE)).toBeNull();
   });
