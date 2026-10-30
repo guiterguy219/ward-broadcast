@@ -50,7 +50,10 @@ describe("pages", () => {
 
 describe("POST /join", () => {
   it("rejects a form without consent, a valid phone, or a group", async () => {
-    const res = await postJoin([["name", "Test Member"], ["phone", "123"]]);
+    const res = await postJoin([
+      ["name", "Test Member"],
+      ["phone", "123"],
+    ]);
     expect(res.status).toBe(422);
     const html = await res.text();
     expect(html).toContain("Enter a 10-digit US mobile number");
@@ -76,7 +79,12 @@ describe("POST /join", () => {
   it("stores a pending signup when signups are open", async () => {
     const DB = createTestDb().db;
     const res = await postJoin(
-      [["name", "Test Member"], ["phone", "(801) 555-0124"], ["groups", "rs"], ["consent", "yes"]],
+      [
+        ["name", "Test Member"],
+        ["phone", "(801) 555-0124"],
+        ["groups", "rs"],
+        ["consent", "yes"],
+      ],
       { DB, SIGNUPS_OPEN: "true" },
     );
     expect(res.status).toBe(200);
@@ -84,7 +92,12 @@ describe("POST /join", () => {
     expect(await findMemberByPhone(DB, "+18015550124")).toMatchObject({ name: "Test Member", status: "pending" });
 
     const again = await postJoin(
-      [["name", "Test Member"], ["phone", "8015550124"], ["groups", "rs"], ["consent", "yes"]],
+      [
+        ["name", "Test Member"],
+        ["phone", "8015550124"],
+        ["groups", "rs"],
+        ["consent", "yes"],
+      ],
       { DB, SIGNUPS_OPEN: "true" },
     );
     expect(await again.text()).toContain("Watch for a text");
@@ -92,7 +105,12 @@ describe("POST /join", () => {
 
   it("tells a stopped number to text START instead of re-opening it", async () => {
     const { db: DB, sqlite } = createTestDb();
-    const fields: [string, string][] = [["name", "Test"], ["phone", "8015550125"], ["groups", "eq"], ["consent", "yes"]];
+    const fields: [string, string][] = [
+      ["name", "Test"],
+      ["phone", "8015550125"],
+      ["groups", "eq"],
+      ["consent", "yes"],
+    ];
     await postJoin(fields, { DB, SIGNUPS_OPEN: "true" });
     sqlite.prepare("UPDATE members SET status = 'stopped'").run();
     const html = await (await postJoin(fields, { DB, SIGNUPS_OPEN: "true" })).text();
@@ -102,7 +120,12 @@ describe("POST /join", () => {
 
   it("returns a form error, not a 500, for a group that is no longer active", async () => {
     const { db: DB, sqlite } = createTestDb();
-    const fields: [string, string][] = [["name", "Test"], ["phone", "8015550126"], ["groups", "rs"], ["consent", "yes"]];
+    const fields: [string, string][] = [
+      ["name", "Test"],
+      ["phone", "8015550126"],
+      ["groups", "rs"],
+      ["consent", "yes"],
+    ];
     sqlite.prepare("UPDATE groups SET active = 0 WHERE slug = 'rs'").run();
     const res = await postJoin(fields, { DB, SIGNUPS_OPEN: "true" });
     expect(res.status).toBe(422);
@@ -111,14 +134,13 @@ describe("POST /join", () => {
 });
 
 describe("POST /api/webhook", () => {
-  it("acknowledges Telnyx events", async () => {
+  it("rejects requests without a valid Telnyx signature", async () => {
     const res = await app.request(
       "/api/webhook",
       { method: "POST", body: JSON.stringify({ data: { event_type: "message.received" } }) },
       env,
     );
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ received: true });
+    expect(res.status).toBe(401);
   });
 });
 

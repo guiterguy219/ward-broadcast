@@ -4,6 +4,8 @@ export const PROGRAM_NAME = "GibsonJ Broadcast";
 export const OPERATOR = "Jared Gibson";
 /** Who the service currently sends for; shown under the name. */
 export const SERVING = "Payson 10th Ward Elders Quorum and Relief Society";
+/** Short form for SMS replies like HELP. */
+export const CONTACT_SERVING_SHORT = "Payson 10th Ward EQ and RS";
 export const EFFECTIVE_DATE = "October 29, 2026";
 
 /** Disclosure shown next to the consent box and repeated in the terms. */
