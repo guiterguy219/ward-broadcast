@@ -8,6 +8,7 @@
  */
 import type { ConsentDescription, OAuthHelpers } from "@cloudflare/workers-oauth-provider";
 import type { Context } from "hono";
+import { authLockedOut, recordAuthFailure } from "./db";
 import { Layout } from "./pages/Layout";
 
 /** Scope granted to every admin token. */
@@ -16,7 +17,7 @@ export const ADMIN_SCOPE = "broadcast";
 /** What a token carries into MCP tool calls. */
 export type AdminProps = { admin: string };
 
-type AuthEnv = { ADMIN_KEYS?: string; OAUTH_PROVIDER: OAuthHelpers };
+type AuthEnv = { DB: D1Database; ADMIN_KEYS?: string; OAUTH_PROVIDER?: OAuthHelpers };
 
 /**
  * Finds the admin whose passphrase hash matches, comparing every entry in
@@ -48,7 +49,7 @@ function hexToBytes(hex: string): Uint8Array {
   return Uint8Array.from(clean.match(/../g) ?? [], (pair) => parseInt(pair, 16));
 }
 
-function ConsentPage({ details, handle, error }: { details: ConsentDescription; handle: string; error?: string }) {
+function ConsentPage({ details, handle }: { details: ConsentDescription; handle: string }) {
   const origin = details.clientDomain
     ? `published by ${details.clientDomain}`
     : "self-registered; its name isn't verified";
@@ -68,11 +69,6 @@ function ConsentPage({ details, handle, error }: { details: ConsentDescription; 
         </div>
       )}
       <form method="post" action="/authorize" class="panel">
-        {error && (
-          <div class="notice notice-error" role="alert">
-            <p>{error}</p>
-          </div>
-        )}
         <input type="hidden" name="handle" value={handle} />
         <div class="field">
           <label class="label" for="passphrase">
@@ -91,7 +87,13 @@ function ConsentPage({ details, handle, error }: { details: ConsentDescription; 
           <button class="button" name="decision" value="approve">
             Allow
           </button>
-          <button class="button" name="decision" value="deny" style="background: transparent; color: var(--ink)">
+          <button
+            class="button"
+            name="decision"
+            value="deny"
+            formnovalidate
+            style="background: transparent; color: var(--ink)"
+          >
             Deny
           </button>
         </div>
@@ -102,34 +104,42 @@ function ConsentPage({ details, handle, error }: { details: ConsentDescription; 
 
 /** GET /authorize: validate the client's request and show the consent + passphrase page. */
 export async function showAuthorize(c: Context<{ Bindings: AuthEnv }>) {
-  const oauth = c.env.OAUTH_PROVIDER;
-  let request;
+  const oauth = c.env.OAUTH_PROVIDER!;
   try {
-    request = await oauth.parseAuthRequest(c.req.raw);
+    const request = await oauth.parseAuthRequest(c.req.raw);
+    const details = await oauth.describeConsent(request);
+    const consent = await oauth.beginConsent(request);
+    const html = await (<ConsentPage details={details} handle={consent.handle} />).toString();
+    consent.headers.set("Content-Type", "text/html; charset=utf-8");
+    return new Response(`<!doctype html>${html}`, { headers: consent.headers });
   } catch (error) {
+    // Redirect back to the client only when the library validated where to send it.
     const redirect = (error as { redirectTo?: string }).redirectTo;
     if (redirect) return c.redirect(redirect, 302);
+    console.error("authorize page failed", (error as Error).name, (error as Error).message);
     return c.text(`This sign-in link isn't valid: ${(error as Error).message}`, 400);
   }
-  const details = await oauth.describeConsent(request);
-  const consent = await oauth.beginConsent(request);
-  const html = await (<ConsentPage details={details} handle={consent.handle} />).toString();
-  consent.headers.set("Content-Type", "text/html; charset=utf-8");
-  return new Response(`<!doctype html>${html}`, { headers: consent.headers });
 }
 
 /** POST /authorize: deny, or check the passphrase and issue a token for that admin. */
 export async function submitAuthorize(c: Context<{ Bindings: AuthEnv }>) {
-  const oauth = c.env.OAUTH_PROVIDER;
+  const oauth = c.env.OAUTH_PROVIDER!;
   const form = await c.req.formData();
   const handle = String(form.get("handle") ?? "");
+  const ip = c.req.header("cf-connecting-ip") ?? "unknown";
+  let stage = "deny";
   try {
     if (form.get("decision") !== "approve") {
       const denied = await oauth.denyConsent(c.req.raw, handle);
       return new Response(null, { status: 302, headers: denied.headers });
     }
+    stage = "passphrase";
+    if (await authLockedOut(c.env.DB, ip)) {
+      return c.text("Too many wrong passphrases from this network. Try again in an hour.", 429);
+    }
     const admin = await adminForPassphrase(c.env.ADMIN_KEYS, String(form.get("passphrase") ?? ""));
     if (!admin) {
+      await recordAuthFailure(c.env.DB, ip);
       // The handle is still valid; send them back to the same page to retry.
       return c.html(
         <Layout title="Wrong passphrase">
@@ -142,7 +152,9 @@ export async function submitAuthorize(c: Context<{ Bindings: AuthEnv }>) {
         401,
       );
     }
+    stage = "approve";
     const approved = await oauth.approveConsent(c.req.raw, handle, { scope: [ADMIN_SCOPE] });
+    stage = "complete";
     const { redirectTo } = await oauth.completeAuthorization({
       request: approved.request,
       userId: admin,
@@ -152,7 +164,11 @@ export async function submitAuthorize(c: Context<{ Bindings: AuthEnv }>) {
     });
     approved.headers.set("Location", redirectTo);
     return new Response(null, { status: 302, headers: approved.headers });
-  } catch {
+  } catch (error) {
+    console.error("authorize submit failed", stage, (error as Error).name, (error as Error).message);
+    if (stage === "complete") {
+      return c.text("Something went wrong finishing sign-in. Start connecting again from your app.", 500);
+    }
     return c.text("This sign-in page expired or was already used. Start connecting again from your app.", 400);
   }
 }

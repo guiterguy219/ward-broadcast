@@ -420,7 +420,7 @@ export async function removeMember(
     .all<{ group_slug: string }>();
   const targets = results
     .map((row) => row.group_slug)
-    .filter((slug) => !input.groups || input.groups.length === 0 || input.groups.includes(slug));
+    .filter((slug) => input.groups === undefined || input.groups.includes(slug));
   if (targets.length === 0) return [];
   await db.batch(
     targets.flatMap((slug) => [
@@ -448,4 +448,34 @@ export async function listReplies(db: D1Database, limit: number) {
     .bind(limit)
     .all<{ received_at: string; phone: string; name: string | null; text: string; auto_replied: number }>();
   return results;
+}
+
+/** Active (receiving) member count per group slug. */
+export async function activeCountsByGroup(db: D1Database): Promise<Record<string, number>> {
+  const { results } = await db
+    .prepare(
+      `SELECT ms.group_slug, COUNT(*) AS n FROM memberships ms JOIN members m ON m.id = ms.member_id
+       WHERE m.status = 'active' AND ms.status = 'active' GROUP BY ms.group_slug`,
+    )
+    .all<{ group_slug: string; n: number }>();
+  return Object.fromEntries(results.map((row) => [row.group_slug, row.n]));
+}
+
+/** Failed sign-in attempts allowed per IP per hour before the form refuses. */
+export const MAX_AUTH_FAILURES_PER_HOUR = 10;
+
+/** True if this IP has too many recent failed passphrase attempts. */
+export async function authLockedOut(db: D1Database, ip: string): Promise<boolean> {
+  const row = await db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM auth_failures
+       WHERE ip = ? AND failed_at >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 hour')`,
+    )
+    .bind(ip)
+    .first<{ n: number }>();
+  return (row?.n ?? 0) >= MAX_AUTH_FAILURES_PER_HOUR;
+}
+
+export async function recordAuthFailure(db: D1Database, ip: string): Promise<void> {
+  await db.prepare("INSERT INTO auth_failures (ip) VALUES (?)").bind(ip).run();
 }

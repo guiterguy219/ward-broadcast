@@ -16,7 +16,15 @@ import {
   type SendJob,
 } from "./broadcasts";
 import { toE164 } from "./content";
-import { listActiveGroups, listMembers, listReplies, removeMember, requestSignup, UnknownGroupError } from "./db";
+import {
+  activeCountsByGroup,
+  listActiveGroups,
+  listMembers,
+  listReplies,
+  removeMember,
+  requestSignup,
+  UnknownGroupError,
+} from "./db";
 import { confirmRequest, type ProgramConfig } from "./messages";
 import type { SmsSender } from "./telnyx";
 import {
@@ -82,8 +90,7 @@ export function buildMcpServer(deps: McpDeps): McpServer {
     "list_groups",
     { description: "Groups members can join, with active member counts and their canned reply text." },
     async () => {
-      const groups = await listActiveGroups(db);
-      const members = await listMembers(db);
+      const [groups, counts] = await Promise.all([listActiveGroups(db), activeCountsByGroup(db)]);
       return json(
         groups.map((group) => ({
           slug: group.slug,
@@ -91,11 +98,7 @@ export function buildMcpServer(deps: McpDeps): McpServer {
           keyword: group.keyword,
           senderName: group.sender_name,
           replyText: group.reply_text,
-          activeMembers: members.filter(
-            (member) =>
-              member.status === "active" &&
-              member.groups.some((membership) => membership.slug === group.slug && membership.status === "active"),
-          ).length,
+          activeMembers: counts[group.slug] ?? 0,
         })),
       );
     },
@@ -156,7 +159,7 @@ export function buildMcpServer(deps: McpDeps): McpServer {
       description: "Remove someone from groups at their request (logged). Doesn't block them from rejoining.",
       inputSchema: {
         phone: z.string(),
-        groups: z.array(z.string()).optional().describe("Group slugs; omit to remove from all groups"),
+        groups: z.array(z.string()).min(1).optional().describe("Group slugs; omit to remove from all groups"),
         reason: z.string().describe("Why, e.g. 'moved out of the ward'"),
       },
     },
@@ -185,13 +188,21 @@ export function buildMcpServer(deps: McpDeps): McpServer {
         slug: z.string().describe("lowercase-with-dashes, e.g. lesson-reminder"),
         name: z.string(),
         body: z.string(),
-        defaultGroups: z.array(z.string()).default([]),
-        variables: z.record(z.string(), variableSpec).default({}),
+        defaultGroups: z.array(z.string()).optional().describe("Omit to keep the existing template's groups"),
+        variables: z.record(z.string(), variableSpec).optional().describe("Omit to keep the existing variables"),
       },
     },
     async (input) =>
       guarded(async () => {
-        const template = { ...input, variables: input.variables as Record<string, VariableSpec> };
+        // Partial edits keep whatever the caller didn't send.
+        const existing = await getTemplate(db, input.slug);
+        const template = {
+          slug: input.slug,
+          name: input.name,
+          body: input.body,
+          defaultGroups: input.defaultGroups ?? existing?.defaultGroups ?? [],
+          variables: (input.variables ?? existing?.variables ?? {}) as Record<string, VariableSpec>,
+        };
         validateTemplate(
           template,
           (await listActiveGroups(db)).map((group) => group.slug),

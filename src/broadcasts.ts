@@ -403,7 +403,11 @@ export async function broadcastStatus(db: D1Database, broadcastId: number) {
     .prepare("SELECT status, COUNT(*) AS n FROM outbox WHERE broadcast_id = ? GROUP BY status")
     .bind(broadcastId)
     .all<{ status: string; n: number }>();
-  return { ...broadcast, counts: Object.fromEntries(results.map((row) => [row.status, row.n])) };
+  return {
+    ...broadcast,
+    groups: JSON.parse(String(broadcast.groups)) as string[],
+    counts: Object.fromEntries(results.map((row) => [row.status, row.n])),
+  };
 }
 
 /** 128-bit random hex id. */
@@ -428,12 +432,16 @@ export async function listBroadcasts(db: D1Database, limit: number) {
 }
 
 /**
- * Segments that left (sent or delivered) since `since`, and an estimated cost.
- * Counts every outbound broadcast text; keyword replies aren't stored and aren't included.
+ * Texts and segments from broadcasts created since `since`, with an estimated
+ * cost. Counts every text Telnyx accepted (it has an id), including ones that
+ * later failed delivery, since those are still billed. Keyword replies aren't stored.
  */
 export async function usageSince(db: D1Database, since: Date) {
   const { results } = await db
-    .prepare("SELECT text FROM outbox WHERE status IN ('sent', 'delivered') AND updated_at >= ?")
+    .prepare(
+      `SELECT o.text FROM outbox o JOIN broadcasts b ON b.id = o.broadcast_id
+       WHERE o.telnyx_id IS NOT NULL AND b.created_at >= ?`,
+    )
     .bind(since.toISOString())
     .all<{ text: string }>();
   const segments = results.reduce((sum, row) => sum + segmentInfo(row.text).segments, 0);

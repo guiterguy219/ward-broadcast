@@ -149,6 +149,39 @@ describe("MCP tools", () => {
   });
 });
 
+describe("MCP tool edge cases from review", () => {
+  it("a partial save_template keeps the existing groups and variables", async () => {
+    await call("save_template", {
+      slug: "activity",
+      name: "Activity",
+      body: "{{what}} on {{when}}.",
+      defaultGroups: ["rs"],
+      variables: { what: { required: true }, when: { required: true } },
+    });
+    const edited = await call("save_template", { slug: "activity", name: "Activity", body: "{{what}} is {{when}}." });
+    expect(edited.data).toMatchObject({ defaultGroups: ["rs"], variables: { what: { required: true } } });
+  });
+
+  it("remove_member rejects an empty group list instead of removing everything", async () => {
+    addActiveMember("+18015550006", "Stays", ["eq", "rs"]);
+    const result = await call("remove_member", { phone: "8015550006", groups: [], reason: "x" });
+    expect(result.isError).toBe(true);
+    expect((await call("list_groups")).data.map((group: { activeMembers: number }) => group.activeMembers)).toEqual([
+      1, 1,
+    ]);
+  });
+
+  it("usage counts texts Telnyx accepted, including ones that later failed delivery", async () => {
+    addActiveMember("+18015550007", "A", ["eq"]);
+    addActiveMember("+18015550008", "B", ["eq"]);
+    const preview = await call("preview_broadcast", { groups: ["eq"], body: "Usage check" });
+    await call("send_broadcast", { preview_id: preview.data.previewId });
+    for (const job of queue.take()) await processSendJob(db, sender, job);
+    sqlite.prepare("UPDATE outbox SET status = 'failed' WHERE telnyx_id = 'fake-2'").run();
+    expect((await call("usage")).data).toMatchObject({ texts: 2, segments: 2 });
+  });
+});
+
 describe("admin passphrases", () => {
   // SHA-256 of "correct horse battery staple"
   const keys = JSON.stringify({ jared: "c4bbcb1fbec99d65bf59d85c8cb62ee2db963f0fe106f483d9afa73bd4e39a8a" });
