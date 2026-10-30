@@ -6,14 +6,6 @@ export const OPERATOR = "Jared Gibson";
 export const SERVING = "Payson 10th Ward Elders Quorum and Relief Society";
 export const EFFECTIVE_DATE = "October 29, 2026";
 
-/** Groups a member can join; `keyword` is what they text after JOIN. */
-export const GROUPS = [
-  { slug: "eq", keyword: "EQ", name: "Elders Quorum", sender: "Payson 10th Ward EQ" },
-  { slug: "rs", keyword: "RS", name: "Relief Society", sender: "Payson 10th Ward RS" },
-] as const;
-
-export type GroupSlug = (typeof GROUPS)[number]["slug"];
-
 /** Disclosure shown next to the consent box and repeated in the terms. */
 export const FREQUENCY = "Message frequency varies, about 2 messages a week per group.";
 export const RATES = "Message and data rates may apply.";

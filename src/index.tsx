@@ -1,5 +1,6 @@
 import { Hono } from "hono";
-import { GROUPS, toE164 } from "./content";
+import { formatUsPhone, toE164 } from "./content";
+import { listActiveGroups, requestSignup, UnknownGroupError, type SignupResult } from "./db";
 import {
   HomePage,
   JoinPage,
@@ -11,6 +12,7 @@ import {
 } from "./pages/pages";
 
 export type Env = {
+  DB: D1Database;
   SIGNUPS_OPEN: string;
   TEXT_NUMBER: string;
   CONTACT_EMAIL: string;
@@ -28,20 +30,23 @@ function siteConfig(env: Env): SiteConfig {
 }
 
 app.get("/", (c) => c.html(<HomePage config={siteConfig(c.env)} />));
-app.get("/join", (c) => c.html(<JoinPage config={siteConfig(c.env)} />));
+app.get("/join", async (c) =>
+  c.html(<JoinPage config={siteConfig(c.env)} groups={await listActiveGroups(c.env.DB)} />),
+);
 app.get("/terms", (c) => c.html(<TermsPage config={siteConfig(c.env)} />));
 app.get("/privacy", (c) => c.html(<PrivacyPage config={siteConfig(c.env)} />));
 app.get("/healthz", (c) => c.text("ok"));
 
 /**
- * Validates the signup form. Saving and the confirmation text come with the
- * messaging build; until SIGNUPS_OPEN is "true" a valid form is acknowledged
- * but not stored.
+ * Validates and stores a web signup as pending. The reply-YES confirmation
+ * text is sent by the SMS layer. Until SIGNUPS_OPEN is "true" a valid form is
+ * acknowledged but not stored.
  */
 app.post("/join", async (c) => {
   const config = siteConfig(c.env);
+  const groups = await listActiveGroups(c.env.DB);
   const body = await c.req.parseBody({ all: true });
-  const validSlugs: string[] = GROUPS.map((group) => group.slug);
+  const validSlugs = groups.map((group) => group.slug);
   const rawGroups = body.groups === undefined ? [] : [body.groups].flat();
   const form: JoinForm = {
     name: String(body.name ?? "").trim(),
@@ -56,20 +61,44 @@ app.post("/join", async (c) => {
   if (form.groups.length === 0) errors.groups = "Choose at least one group.";
   if (!form.consent) errors.consent = "Check the box to agree to receive texts.";
   if (Object.keys(errors).length > 0) {
-    return c.html(<JoinPage config={config} form={form} errors={errors} />, 422);
+    return c.html(<JoinPage config={config} groups={groups} form={form} errors={errors} />, 422);
   }
 
   if (!config.signupsOpen) {
     return c.html(
       <JoinPage
         config={config}
+        groups={groups}
         notice="Thanks! Texting hasn't started yet, so nothing was saved. Please sign up again once it's live."
       />,
     );
   }
-  // Signups open: storing the member and sending the reply-YES text land with the messaging build.
-  return c.text("Signups are not implemented yet.", 501);
+  let result: SignupResult;
+  try {
+    result = await requestSignup(c.env.DB, {
+      phone: toE164(form.phone) as string,
+      name: form.name,
+      groups: form.groups,
+      source: "web",
+      detail: `web form: groups=${form.groups.join(",")}; consent box checked`,
+    });
+  } catch (error) {
+    if (!(error instanceof UnknownGroupError)) throw error;
+    const groupErrors: JoinErrors = { groups: "That group isn't taking sign-ups right now. Choose another." };
+    return c.html(<JoinPage config={config} groups={groups} form={form} errors={groupErrors} />, 422);
+  }
+  return c.html(<JoinPage config={config} groups={groups} notice={signupNotice(result, config)} />);
 });
+
+/** What to tell someone after a valid signup, based on what actually changed. */
+function signupNotice(result: SignupResult, config: SiteConfig): string {
+  if (result.stopped) {
+    const where = config.textNumber ? ` to ${formatUsPhone(config.textNumber)}` : "";
+    return `This number opted out by texting STOP. To turn texts back on, text START${where} from that phone.`;
+  }
+  if (result.pendingGroups.length === 0) return "You're already signed up for those groups. No changes needed.";
+  return "Thanks! Watch for a text from us and reply YES to finish signing up.";
+}
 
 /**
  * Telnyx messaging webhook. Acknowledges every event so Telnyx doesn't retry;

@@ -1,7 +1,6 @@
 import {
   EFFECTIVE_DATE,
   FREQUENCY,
-  GROUPS,
   KEYWORDS,
   OPERATOR,
   PROGRAM_NAME,
@@ -9,6 +8,7 @@ import {
   SERVING,
   formatUsPhone,
 } from "../content";
+import type { Group } from "../db";
 import { Layout } from "./Layout";
 
 export type SiteConfig = {
@@ -106,11 +106,14 @@ function FieldError({ id, message }: { id: string; message?: string }) {
 
 export function JoinPage({
   config,
+  groups,
   form = { name: "", phone: "", groups: [], consent: false },
   errors = {},
   notice,
 }: {
   config: SiteConfig;
+  /** Active groups from the database, shown as checkboxes. */
+  groups: Group[];
   form?: JoinForm;
   errors?: JoinErrors;
   notice?: string;
@@ -190,7 +193,7 @@ export function JoinPage({
         <fieldset aria-describedby={errors.groups ? "groups-error" : undefined}>
           <legend>Which groups?</legend>
           <div class="options">
-            {GROUPS.map((group) => (
+            {groups.map((group) => (
               <label class="option">
                 <input
                   type="checkbox"
@@ -200,7 +203,7 @@ export function JoinPage({
                 />
                 <span class="option-text">
                   <strong>{group.name}</strong>
-                  <span>{GROUP_BLURBS[group.slug]}</span>
+                  <span>{GROUP_BLURBS[group.slug] ?? "Lessons, service requests, activities"}</span>
                 </span>
               </label>
             ))}
