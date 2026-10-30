@@ -6,6 +6,7 @@ Opt-in SMS announcements for the Payson 10th Ward Elders Quorum and Relief Socie
 Cloudflare Worker (Hono) at https://broadcast.gibsonj.net.
 
 Design and decisions: the "Church SMS Broadcast — Research & Proposal" Claude Doc.
+Telnyx brand/campaign configuration: [docs/telnyx-campaign.md](docs/telnyx-campaign.md).
 
 ## Status
 

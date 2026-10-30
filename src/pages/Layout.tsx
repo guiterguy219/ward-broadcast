@@ -215,8 +215,8 @@ export function Layout({ title, children }: { title: string; children: Child }) 
             <a class="brand" href="/">
               <BrandMark />
               <span class="brand-name">
-                Payson 10th Ward
-                <small>Announcements by text</small>
+                {PROGRAM_NAME}
+                <small>Group announcements by text</small>
               </span>
             </a>
           </header>

@@ -3,8 +3,10 @@ import {
   FREQUENCY,
   GROUPS,
   KEYWORDS,
+  OPERATOR,
   PROGRAM_NAME,
   RATES,
+  SERVING,
   formatUsPhone,
 } from "../content";
 import { Layout } from "./Layout";
@@ -41,10 +43,10 @@ function TextToJoin({ textNumber }: { textNumber: string }) {
 export function HomePage({ config }: { config: SiteConfig }) {
   return (
     <Layout title="Home">
-      <h1>Ward announcements, sent as plain texts</h1>
+      <h1>Group announcements, sent as plain texts</h1>
       <p class="lead">
-        Lesson reminders, service requests, and activity news from the Elders Quorum and Relief
-        Society presidencies. No app to install.
+        Lesson reminders, service requests, and activity news, with no app to install. Currently
+        serving the {SERVING}.
       </p>
       <div class="actions">
         <a class="button" href="/join">
@@ -83,7 +85,7 @@ export function HomePage({ config }: { config: SiteConfig }) {
       <h2>Questions?</h2>
       <p>
         Email <a href={`mailto:${config.contactEmail}`}>{config.contactEmail}</a>, or talk to a
-        member of your quorum or Relief Society presidency.
+        member of your quorum or Relief Society presidency. {PROGRAM_NAME} is run by {OPERATOR}.
       </p>
     </Layout>
   );
@@ -116,7 +118,7 @@ export function JoinPage({
   const errorCount = Object.keys(errors).length;
   return (
     <Layout title="Sign up">
-      <h1>Sign up for ward texts</h1>
+      <h1>Sign up for group texts</h1>
       <p class="lead">Takes under a minute. We'll text you once to confirm.</p>
 
       {!config.signupsOpen && !notice && (
@@ -216,7 +218,7 @@ export function JoinPage({
               aria-describedby={errors.consent ? "consent-error" : undefined}
             />
             <span>
-              I agree to receive recurring text messages from {PROGRAM_NAME} at this number.{" "}
+              I agree to receive recurring text messages from {PROGRAM_NAME} at this number for the groups I chose.{" "}
               {FREQUENCY} {RATES} {KEYWORDS} Signing up is never required to take part in the ward.
               See the <a href="/terms">terms</a> and <a href="/privacy">privacy policy</a>.
             </span>
@@ -245,9 +247,10 @@ export function TermsPage({ config }: { config: SiteConfig }) {
         <p class="effective">Effective {EFFECTIVE_DATE}</p>
         <h2>What this is</h2>
         <p>
-          {PROGRAM_NAME} sends recurring text messages to members of the Payson 10th Ward Elders
-          Quorum and Relief Society who sign up: lesson reminders, service requests, and activity
-          announcements. Messages start with the group name, such as "Payson 10th Ward EQ:".
+          {PROGRAM_NAME} is a personal text service run by {OPERATOR}. It currently sends recurring
+          text messages to members of the {SERVING} who sign up: lesson reminders, service
+          requests, and activity announcements. Messages start with the group name, such as
+          "Payson 10th Ward EQ:".
         </p>
         <h2>Signing up</h2>
         <p>
@@ -306,8 +309,8 @@ export function PrivacyPage({ config }: { config: SiteConfig }) {
         <h2>How we use it</h2>
         <p>
           Only to send the {PROGRAM_NAME} texts you signed up for and to answer HELP and STOP
-          requests. Only the quorum and Relief Society presidency members who run these texts can
-          see the list.
+          requests. Only {OPERATOR} and the presidency members who send these texts can see the
+          list.
         </p>
         <h2>Sharing</h2>
         <p>
